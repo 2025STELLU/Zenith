@@ -3,8 +3,8 @@
 Minecraft 多尺度实时风与天气模拟（NeoForge 1.21.1）。
 
 风场/天气系统架构移植并改写自 [Aerodynamics4MC-Core](https://github.com/MozillaFiredoge/Aerodynamics4MC-Core)
-（MIT 许可，详见 `LICENSE` 与 `THIRD_PARTY_LICENSES/`），包名已改为 `net.atomos.zenith`，
-原生 JNI LBM 求解器替换为纯 Java 实现，并新增了热对流、海风、风暴、台风系统。
+（MIT 许可，详见 `LICENSE` 与 `THIRD_PARTY_LICENSES/`），包名改为 `net.atomos.zenith`，在此感谢Firedoge的技术支持。
+我把原生的JNI LBM求解器替换为了纯Java版的实现，并新增了热对流、海风、风暴、台风系统。
 
 ## 架构
 
@@ -23,7 +23,7 @@ L2 LocalFlowSolver（纯Java：障碍物绕流+浮力，客户端本地高分辨
 
 - 服务端权威：L0/L1/驱动器；游戏玩法一律走 `ZenithWindApi.sampleGameplay()` 并检查
   `isTrustedForGameplay()`。
-- 客户端：服务端每 2 秒广播粗风场，客户端本地求解器提供可视化细节。
+- 客户端：服务端每2秒广播粗风场，客户端本地求解器提供可视化细节。
 
 ## 新增天气系统
 
@@ -60,4 +60,4 @@ if (wind.isTrustedForGameplay()) {
 ./gradlew build
 ```
 
-需要 JDK 21（Gradle toolchain 自动下载）。产物在 `build/libs/`。
+需要 JDK 21（Gradle toolchain 自动下载）。编译后的产物在 `build/libs/`中。
