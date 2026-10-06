@@ -1,45 +1,59 @@
-MIT License
+================================================================================
+ZENITH LICENSE v1.0
+Copyright (c) 2026 atomos (2025STELLU)
+All Rights Reserved.
+================================================================================
 
-Copyright (c) 2026 Astra / atomos
+1. SCOPE
+
+This license governs the original contributions of the copyright holder to
+the Zenith software (the "Software"). Portions of the Software derived from
+Aerodynamics4MC-Core, Copyright (c) MozillaFiredoge, remain governed by the
+MIT License; the full text is included under THIRD_PARTY_LICENSES/ and its
+terms continue to apply to those portions.
+
+2. GRANT OF RIGHTS (NON-COMMERCIAL, WITH ATTRIBUTION)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+of the Software and associated documentation files, to use, copy, modify,
+merge, publish and distribute copies of the Software for Non-Commercial
+purposes only, subject to the conditions in Section 3.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+"Non-Commercial" means not primarily intended for or directed toward
+commercial advantage or monetary compensation, including but not limited to:
+selling copies of the Software, offering the Software for a fee, or bundling
+it into a paid product or service.
+
+Any Commercial use requires the prior written permission of the copyright
+holder.
+
+3. CONDITIONS
+
+a) The copyright notice above, this permission notice, and the attribution
+   notice in Section 5 must be included in all copies or substantial
+   portions of the Software.
+b) Any file you modify must carry a prominent notice stating that you
+   changed it.
+c) You may not present a modified version as the original, nor use the
+   copyright holder's name to endorse or promote derived products without
+   prior written permission.
+
+4. NO WARRANTY
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
 AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
 
---------------------------------------------------------------------------------
-ATTRIBUTION / 致谢与来源声明
---------------------------------------------------------------------------------
+5. ATTRIBUTION
 
-Zenith 的风场/天气系统架构与算法设计移植并改写自：
+- atomos (2025STELLU) — original author of Zenith.
+- MozillaFiredoge — author of Aerodynamics4MC-Core
+  (https://github.com/MozillaFiredoge/Aerodynamics4MC-Core), whose
+  wind/weather system architecture and algorithms were ported and rewritten
+  for Zenith under the MIT License.
 
-  Aerodynamics4MC-Core
-  https://github.com/MozillaFiredoge/Aerodynamics4MC-Core
-  Copyright (c) MozillaFiredoge
-  Licensed under the MIT License
-
-原仓库以 MIT 许可发布，允许复制、修改与再分发（已按许可要求保留上述声明）。
-Zenith 对其进行了以下实质性改动：
-
-  - 包名由 com.aerodynamics4mc.* 更名为 net.atomos.zenith.*
-  - 仅支持 NeoForge（1.21.1），不再使用 Stonecutter 多加载器构建
-  - 原生 JNI LBM 求解器（D3Q27）替换为纯 Java 本地流场求解器
-    （net.atomos.zenith.wind.LocalFlowSolver），无需编译 native 代码
-  - 新增系统：热对流（thermals）、海风（sea breeze）、风暴单体（storm cells）、
-    台风（typhoon），以及配套特效与粒子
-  - Create: Aeronautics 联动模块未移植（该联动由用户另行维护）
-
-原仓库的 LICENSE 全文见本目录 THIRD_PARTY_LICENSES/Aerodynamics4MC-Core-LICENSE。
+Redistribution without this attribution notice is prohibited.
