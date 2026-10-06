@@ -1,8 +1,8 @@
 package net.atomos.zenith.api;
 
 /**
- * 服务端玩法采样：保证来自服务端权威数据源。使用前必须检查
- * {@link #isTrustedForGameplay()}。
+ * 服务端玩法用的采样，保证来自服务端权威数据源。
+ * 用之前先查 {@link #isTrustedForGameplay()}，没信任的别直接拿去用。
  */
 public final class GameplayWindSample {
     private final ZenithWindSample inner;
@@ -15,7 +15,7 @@ public final class GameplayWindSample {
         return new GameplayWindSample(sample);
     }
 
-    /** 未受信任时的空采样（零风）。 */
+    /** 不受信任时的空采样：全是 0，就当没风。 */
     public static GameplayWindSample empty() {
         return new GameplayWindSample(ZenithWindSample.builder()
                 .authority(ZenithWindSample.Authority.UNKNOWN)

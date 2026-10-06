@@ -13,15 +13,12 @@ import java.util.List;
 import java.util.Random;
 
 /**
- * 风暴单体系统：积雨云生命史（发展 → 成熟 → 消散）。
+ * 风暴单体：积雨云的一生——发展、成熟、消散。
  *
- * <p>模型：</p>
- * <ul>
- *   <li>发展期（~15 min）：核心上升气流 3–8 m/s，云体增长</li>
- *   <li>成熟期（~20 min）：降水核心下沉气流，阵风锋径向外流 8–15 m/s，随机闪电</li>
- *   <li>消散期（~15 min）：弱下沉 + 层状降水</li>
- *   <li>单体随中层风移动；生成需要高风暴活动度 + 高湿度 + 不稳定层结</li>
- * </ul>
+ * 发展期（~15 分钟）：核心上升气流 3–8 m/s，云越长越高；
+ * 成熟期（~20 分钟）：降水核心开始下沉，阵风锋径向外流 8–15 m/s，还随机劈闪电；
+ * 消散期（~15 分钟）：只剩弱下沉和层状降水。
+ * 单体跟着中层风走；生成要同时满足：风暴活动度高、湿度够、层结不稳定。
  */
 public class StormCellSystem implements WeatherPhenomenon {
     public static final int MAX_CELLS = 8;
@@ -137,13 +134,12 @@ public class StormCellSystem implements WeatherPhenomenon {
         return players.isEmpty() ? null : players.get(random.nextInt(players.size()));
     }
 
-    /** 冰雹伤害：核心区内玩家。 */
     private void damagePlayersInHail(ServerLevel level, StormCell c) {
         if (c.hail01 < 0.5) return;
         for (ServerPlayer p : level.players()) {
             double dx = p.getX() - c.x, dz = p.getZ() - c.z;
             if (dx * dx + dz * dz < c.radiusBlocks * c.radiusBlocks * 0.64) {
-                // 露天才受伤（有方块遮挡不算）
+                // 必须露天：头顶有方块挡着就不算
                 var headPos = p.blockPosition().above(2);
                 if (level.canSeeSky(headPos)) {
                     p.hurt(level.damageSources().generic(), 1.0f);
@@ -152,7 +148,7 @@ public class StormCellSystem implements WeatherPhenomenon {
         }
     }
 
-    /** 指定点冰雹强度 [0,1]（供 API/特效）。 */
+    /** 冰雹强度 [0,1]，供 API 和特效用。 */
     public double hailAt(double x, double z) {
         double h = 0;
         for (StormCell c : cells) {
@@ -184,16 +180,15 @@ public class StormCellSystem implements WeatherPhenomenon {
                 }
                 case MATURE -> {
                     if (norm < 1.0) {
-                        // 降水核心：下沉气流
                         double core = 1 - norm * norm;
+                        // 降水拖着空气往下沉
                         acc = acc.add(new WindContribution(0, -4.5 * core * env, 0,
                                 0.45 * core * env, 0.9 * env));
                     } else if (norm < 2.2) {
-                        // 阵风锋：径向外流
                         double ring = (norm - 1.0) / 1.2;
                         double gust = 12.0 * Math.sin(ring * Math.PI) * env;
                         double inv = r > 0.5 ? 1.0 / r : 0;
-                        // 叠加移动方向的前缘增强
+                        // 阵风锋前缘：顺着移动方向那一侧更猛
                         double lead = (dx * c.moveX + dz * c.moveZ);
                         double leadBoost = 1.0 + 0.5 * clamp01(lead / (r * 8.0 + 1));
                         acc = acc.add(new WindContribution(

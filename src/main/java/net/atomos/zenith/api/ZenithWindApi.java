@@ -1,17 +1,17 @@
 package net.atomos.zenith.api;
 
 /**
- * 服务端风场 API 外观。其他模组通过此类采样风，禁止直接读取内部网格类。
+ * 服务端风场 API 外观。想采样风就调这里，别去翻内部网格类。
  *
- * <p>游戏玩法（实体受力、红石、伤害判定）必须使用 {@code sampleGameplay(...)}
- * 并检查 {@link GameplayWindSample#isTrustedForGameplay()}。</p>
+ * 玩法逻辑（实体受力、红石、伤害判定）走 sampleGameplay，用之前必须检查
+ * GameplayWindSample#isTrustedForGameplay——客户端传来的数据不可信。
  */
 public final class ZenithWindApi {
     private static volatile ZenithWindRuntimeProvider provider;
 
     private ZenithWindApi() {}
 
-    /** 由 Zenith 主模组在启动时调用。 */
+    /** 主模组启动时调一次，用来绑定运行时实现。 */
     public static void bindRuntime(ZenithWindRuntimeProvider p) {
         provider = p;
     }

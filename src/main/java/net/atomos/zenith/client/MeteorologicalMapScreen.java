@@ -11,7 +11,7 @@ import net.minecraft.network.chat.Component;
  */
 public class MeteorologicalMapScreen extends Screen {
     private static final int MAP_SIZE = 220;
-    private static final double MAP_RANGE_BLOCKS = 1200.0; // 地图半宽对应 blocks
+    private static final double MAP_RANGE_BLOCKS = 1200.0;
 
     public MeteorologicalMapScreen() {
         super(Component.translatable("screen.zenith.meteorological_map"));
@@ -23,7 +23,7 @@ public class MeteorologicalMapScreen extends Screen {
         int cx = width / 2, cy = height / 2;
         int left = cx - MAP_SIZE / 2, top = cy - MAP_SIZE / 2;
 
-        // 背景
+        // 背景色铺底
         gfx.fill(left - 8, top - 28, left + MAP_SIZE + 8, top + MAP_SIZE + 8, 0xE0101018);
         gfx.fill(left, top, left + MAP_SIZE, top + MAP_SIZE, 0xFF0A1A33);
         gfx.drawString(font, title, left, top - 20, 0xFFFFFF);
@@ -52,14 +52,13 @@ public class MeteorologicalMapScreen extends Screen {
                 int ey = sy + (int) (Math.cos(ang) * len);
                 int color = speed > 15 ? 0xFFFF5050 : speed > 8 ? 0xFFFFB050 : 0xFF70C0FF;
                 plotLine(gfx, sx, sy, ex, ey, color);
-                // 箭头
                 double a1 = ang + 2.6, a2 = ang - 2.6;
                 plotLine(gfx, ex, ey, ex + (int) (Math.sin(a1) * 4), ey + (int) (Math.cos(a1) * 4), color);
                 plotLine(gfx, ex, ey, ex + (int) (Math.sin(a2) * 4), ey + (int) (Math.cos(a2) * 4), color);
             }
         }
 
-        // 玩家位置
+        // 玩家位置的绿点
         gfx.fill(cx - 2, cy - 2, cx + 2, cy + 2, 0xFF00FF00);
 
         // 台风
@@ -115,7 +114,7 @@ public class MeteorologicalMapScreen extends Screen {
             }
         }
 
-        // 状态栏
+        // 底栏：天气数字
         int y = top + MAP_SIZE + 12;
         if (snap != null) {
             gfx.drawString(font, String.format("风暴活动度: %.0f%%  龙卷: %d  热泡: %d  台风: %d",

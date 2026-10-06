@@ -2,7 +2,6 @@ package net.atomos.zenith.api;
 
 import java.util.Objects;
 
-/** 不可变整数方块坐标。 */
 public final class ZenithBlockPos {
     private final int x;
     private final int y;

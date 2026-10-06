@@ -28,7 +28,6 @@ public final class ClientRenderHelper {
                     .setOverlayState(RenderStateShard.NO_OVERLAY)
                     .createCompositeState(false));
 
-    /** 渲染轴对齐纯色立方体。 */
     public static void renderBox(PoseStack pose, VertexConsumer vc,
                                  float x0, float y0, float z0, float x1, float y1, float z1,
                                  float r, float g, float b, float a) {

@@ -18,7 +18,6 @@ public final class ZenithWindSamplingRules {
         };
     }
 
-    /** 该策略是否允许使用客户端本地细节。 */
     public static boolean mayUseClientLocal(SamplePolicy policy) {
         return policy != null && policy.allowClientLocal();
     }

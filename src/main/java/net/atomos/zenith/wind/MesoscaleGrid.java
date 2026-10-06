@@ -1,11 +1,11 @@
 package net.atomos.zenith.wind;
 
 /**
- * L1 中尺度网格（服务端权威）：33×33×8 格，水平 64×64 blocks，垂直每层 40 blocks。
+ * L1 中尺度网格，服务端权威：33×33×8 格，水平每格 64 格方块，垂直每层 40 格方块。
  *
- * <p>移植自 Aerodynamics4MC-Core 的 {@code MesoscaleGrid}（MIT）。
- * 每刷新：拉取 L0 样本 → 构建 ABL 垂直廓线（Ekman 偏转）→ 地形反弹/阻力 →
- * 阵风与湍流诊断 → 输出诊断摘要（反馈给驱动器）。</p>
+ * 每刷新的流程：从 L0 拉一格样本 → 按 ABL 垂直廓线（对数律 + Ekman 偏转）
+ * 铺开 8 层 → 表层过一遍地形（迎风坡减速、坡面热力风、地形抬升）→
+ * 阵风和湍流诊断 → 输出诊断摘要反哺驱动器。
  */
 public class MesoscaleGrid {
     public static final int RADIUS_CELLS = 16;
@@ -21,15 +21,13 @@ public class MesoscaleGrid {
     public static final double L1_TERRAIN_FORM_DRAG = 0.45;
     public static final double L1_THERMAL_SLOPE_WIND_MPS = 1.10;
 
-    /** 地形探针（高度/粗糙度/坡度）。 */
     public interface TerrainProbe {
         double terrainHeightBlocks(double blockX, double blockZ);
         double roughness01(double blockX, double blockZ);
-        /** 地形坡度向量（dh/dx, dh/dz），无量纲。 */
+        /** 地形坡度向量 (dh/dx, dh/dz)，无量纲。 */
         double[] slopeVector(double blockX, double blockZ);
     }
 
-    /** 单格气柱状态。 */
     public static final class CellColumn {
         public final double[] windX = new double[MAX_LAYERS];
         public final double[] windY = new double[MAX_LAYERS];
@@ -52,7 +50,6 @@ public class MesoscaleGrid {
                                      double meanLowLevelShear, double meanHumidity,
                                      double maxPositiveMoistureConvergence) {}
 
-    /** 采样输出。 */
     public record Sample(double windX, double windY, double windZ,
                          double turbulenceIntensity,
                          double gustX, double gustY, double gustZ,
@@ -99,9 +96,9 @@ public class MesoscaleGrid {
                 double[] slope = terrain.slopeVector(bx, bz);
                 col.surfaceTempK = base.surfaceTempK();
 
-                // ABL 稳定度：地表-气温差决定
+                // ABL 稳定度：地表比空气暖 → 不稳定（取负）
                 double dT = base.surfaceTempK() - base.airTempK();
-                col.ablStability = clamp(-dT / 8.0, -1, 1); // 地表暖 → 不稳定（负）
+                col.ablStability = clamp(-dT / 8.0, -1, 1);
                 double ablHeight = col.ablStability < -0.15 ? ABL_UNSTABLE_HEIGHT_BLOCKS
                         : col.ablStability > 0.15 ? ABL_STABLE_HEIGHT_BLOCKS
                         : ABL_NEUTRAL_HEIGHT_BLOCKS;
@@ -115,13 +112,12 @@ public class MesoscaleGrid {
                 for (int l = 0; l < MAX_LAYERS; l++) {
                     double hMid = (l + 0.5) * LAYER_HEIGHT_BLOCKS;
                     double hAboveGround = hMid - col.terrainHeight;
-                    // 对数廓线（z0 由粗糙度映射）
-                    double z0 = 0.05 + roughness * 1.5;
+                    double z0 = 0.05 + roughness * 1.5; // 粗糙元高度，由粗糙度映射
                     double prof = hAboveGround <= z0 ? 0.15
                             : Math.min(1.0, Math.log(Math.max(hAboveGround, z0 + 0.01) / z0)
                                     / Math.log(Math.max(ablHeight, z0 + 1) / z0));
                     prof = 0.15 + 0.85 * prof;
-                    // ABL 内风速随高度先增后稳；Ekman 偏转随高度增加
+                    // 越往上风越大、偏转越多（Ekman 螺旋），到 ABL 顶收敛
                     double ekmanTurn = ABL_EKMAN_MAX_TURN_RADIANS
                             * clamp01(hAboveGround / ablHeight) * 0.9;
                     double dir = dir0 + ekmanTurn;
@@ -134,28 +130,28 @@ public class MesoscaleGrid {
                     col.humidity01[l] = clamp01(base.humidity01() - l * 0.04);
                 }
 
-                // 地形反弹与阻力（表层）
+                // 表层地形：迎风坡减速、坡面热力风、地形抬升
                 double slopeMag = Math.hypot(slope[0], slope[1]);
                 if (slopeMag > 1e-4) {
                     double drag = clamp(L1_TERRAIN_FORM_DRAG * slopeMag * 3.0, 0, 0.6);
                     col.windX[0] *= (1 - drag);
                     col.windZ[0] *= (1 - drag);
-                    // 坡面热力风（白天上坡/夜间下坡）
+                    // 白天风往坡上爬、晚上往坡下溜（山谷风环流）
                     double diurnal = Math.sin(timeOfDay01 * Math.PI * 2 - Math.PI / 2);
                     double slopeWind = L1_THERMAL_SLOPE_WIND_MPS * diurnal
                             * clamp01(slopeMag * 4.0);
                     col.windX[0] += slope[0] / slopeMag * slopeWind;
                     col.windZ[0] += slope[1] / slopeMag * slopeWind;
-                    // 地形抬升 → 垂直速度
+                    // 风撞上坡面，被顶起来
                     col.windY[0] = (col.windX[0] * slope[0] + col.windZ[0] * slope[1]) * 0.8;
                 }
 
-                // 对流/龙卷强迫叠加到低层
+                // 驱动器的对流/龙卷强迫直接叠到最底层
                 col.windY[0] += base.convEnv() * 2.0 + base.torUpdraft() * 6.0;
                 col.windX[0] += base.convInX() * 0.7 + base.torWindX() * 0.5;
                 col.windZ[0] += base.convInZ() * 0.7 + base.torWindZ() * 0.5;
 
-                // 阵风：种子噪声（随 tick 缓变）
+                // 阵风：种子噪声，随 tick 慢慢变，别用纯随机（会闪）
                 double gustSeed = NoiseUtil.valueNoise2(bx * 0.01, bz * 0.01 + tick * 0.002, seed);
                 double gustAmp = (0.6 + speed0 * 0.22 + base.convEnv() * 3.0)
                         * (1 + col.turbulenceIntensity);
@@ -169,8 +165,7 @@ public class MesoscaleGrid {
                         + slopeMag * 1.2 + base.convEnv() * 0.5
                         + speed0 * 0.012 + col.ablMixingStrength * 0.2);
 
-                // 水平风切变（相邻格差分）
-                // （在第二遍循环中计算，此处先置零）
+                // 水平风切变先置零，第二遍循环里再算（要用到邻居格）
                 col.shearXPerBlock = 0;
                 col.shearZPerBlock = 0;
 
@@ -229,7 +224,7 @@ public class MesoscaleGrid {
         double tempK = lerp(c.temperatureK[layer], c.temperatureK[l2], frac);
         double hum = lerp(c.humidity01[layer], c.humidity01[l2], frac);
 
-        // 地面遮蔽：低于地形 → 强衰减并标记 sheltered
+        // 地面遮蔽：钻到地形下面去的点，风掐掉并打标
         boolean sheltered = false;
         if (hAboveGround < 2.0) {
             double f = clamp01((hAboveGround + 4) / 6.0);

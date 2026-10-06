@@ -3,24 +3,21 @@ package net.atomos.zenith.wind;
 import java.util.List;
 
 /**
- * L2 本地流场求解器（纯 Java）。
+ * L2 本地流场求解器，纯 Java。
  *
- * <p>原版 Aerodynamics4MC-Core 的 L2 是 D3Q27 cumulant LBM 原生求解器（JNI），
- * Zenith 改为纯 Java 解析/诊断模型，无需编译 native 代码：</p>
- * <ul>
- *   <li>障碍物绕流：附近固体方块产生排挤偏转 + 下风尾流亏损（高斯恢复锥）</li>
- *   <li>浮力：热源（熔岩/火焰/火把/营火/风扇加热）产生上升气流</li>
- *   <li>风扇/风道：定向射流</li>
- * </ul>
- * <p>求解器是无状态的逐点诊断模型，游戏玩法与视觉采样都走这里。</p>
+ * 原版 Aerodynamics4MC-Core 的 L2 是 D3Q27 cumulant LBM 原生求解器（JNI），
+ * 这里改成了纯 Java 的解析/诊断模型——不用编译 native 库，代价是精度打折，
+ * 但对游戏里的风来说够用了。模型就三块：
+ *   障碍物绕流：附近的固体方块把风挤开偏转，身后拖一条尾流亏损锥（高斯恢复）；
+ *   热浮力：熔岩/火焰/火把/营火/风扇加热之类的热源顶出一股上升气流；
+ *   风扇/风道：定向射流。
+ * 求解器无状态，逐点诊断；玩法和视觉的采样都走这里。
  */
 public class LocalFlowSolver {
-    /** 障碍物探针。 */
     public interface ObstacleProbe {
         boolean isSolid(int x, int y, int z);
     }
 
-    /** 热源。 */
     public record HeatSource(double x, double y, double z, double powerWatts, double radiusBlocks) {}
 
     public interface HeatProbe {
@@ -36,7 +33,6 @@ public class LocalFlowSolver {
         List<Jet> jetsNear(double x, double y, double z, double radius);
     }
 
-    /** L2 求解输出。 */
     public record LocalFlow(double modX, double modY, double modZ,
                             boolean sheltered, double confidence) {}
 
@@ -51,9 +47,7 @@ public class LocalFlowSolver {
     }
 
     /**
-     * 计算给定点的本地流场修正。
-     *
-     * <p>无状态的逐点诊断模型：障碍物绕流、热浮力、风扇射流修正始终全量应用。
+     * 算给定点的本地流场修正。无状态：每次调用都把障碍物、热源、射流全算一遍。
      *
      * @param baseX/Y/Z L1 基流 (m/s)
      */
@@ -62,11 +56,11 @@ public class LocalFlowSolver {
         double modX = 0, modY = 0, modZ = 0;
         boolean sheltered = false;
 
-        // ---- 障碍物绕流 ----
+        // 障碍物绕流
         double baseSpeed = Math.sqrt(sqr(baseX) + sqr(baseZ));
         if (baseSpeed > 0.05) {
             double dirX = baseX / baseSpeed, dirZ = baseZ / baseSpeed;
-            int r = 4; // 9³ 扫描，兼顾性能与绕流精度
+            int r = 4; // 9³ 扫描：格子数再大性能顶不住，再小绕流不准
             int bx = (int) Math.floor(x), by = (int) Math.floor(y), bz = (int) Math.floor(z);
             for (int dx = -r; dx <= r; dx++)
                 for (int dy = -r; dy <= r; dy++)
@@ -76,18 +70,17 @@ public class LocalFlowSolver {
                         double py = y - (by + dy + 0.5);
                         double pz = z - (bz + dz + 0.5);
                         double d2 = px * px + py * py + pz * pz;
-                        if (d2 < 0.25) { // 在固体内部
+                        if (d2 < 0.25) { // 采样点在固体里，直接算遮蔽
                             sheltered = true;
                             continue;
                         }
                         double d = Math.sqrt(d2);
-                        // 排挤：沿径向向外推
                         double push = Math.min(1.2, 1.0 / d2) * baseSpeed * 0.35;
                         modX += px / d * push;
                         modY += py / d * push * 0.7;
                         modZ += pz / d * push;
-                        // 尾流亏损：下风方向锥形区
-                        double along = px * dirX + pz * dirZ; // >0 表示在方块下风
+                        // 尾流亏损：下风方向的锥形区
+                        double along = px * dirX + pz * dirZ; // >0 在方块下风侧
                         double across = Math.abs(px * dirZ - pz * dirX) + Math.abs(py) * 0.7;
                         if (along > 0 && along < 14) {
                             double coneR = 0.8 + along * 0.35;
@@ -102,17 +95,16 @@ public class LocalFlowSolver {
                     }
         }
 
-        // ---- 热浮力 ----
+        // 热浮力
         for (HeatSource h : heat.heatSourcesNear(x, y, z, 24)) {
             double dx = x - h.x(), dy = y - h.y(), dz = z - h.z();
             double d2 = dx * dx + dy * dy + dz * dz;
             double rr = h.radiusBlocks();
-            // 上升气流柱：热源上方最强
-            double up = h.powerWatts() / 1500.0; // 归一化
+            double up = h.powerWatts() / 1500.0; // 按 1500 W 归一化
             double fall = 1.0 / (1.0 + d2 / (rr * rr));
-            if (dy > -2) {
+            if (dy > -2) { // 热源上方才有上升柱
                 modY += Math.min(6.0, up * 4.0) * fall;
-                // 热泡夹带：轻微向内辐合
+                // 热泡夹带：周围空气被往里吸一点
                 double dh = Math.sqrt(dx * dx + dz * dz);
                 if (dh > 0.5) {
                     modX += -dx / dh * up * 0.8 * fall;
@@ -121,7 +113,7 @@ public class LocalFlowSolver {
             }
         }
 
-        // ---- 风扇射流 ----
+        // 风扇射流
         for (Jet jet : jets.jetsNear(x, y, z, 40)) {
             double px = x - jet.x(), py = y - jet.y(), pz = z - jet.z();
             double along = px * jet.dirX() + py * jet.dirY() + pz * jet.dirZ();

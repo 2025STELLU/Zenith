@@ -12,7 +12,7 @@ public final class ZenithAirfoilProfile {
 
     public ZenithAirfoilDefinition definition() { return definition; }
 
-    /** 在弦向 x 处插值厚度（上下表面 y 差的一半的两倍≈相对厚度）。 */
+    /** 粗估厚度：在 x±0.02 的离散点里找上下表面，取 y 差。 */
     public double thicknessAt(double x) {
         List<ZenithAirfoilCoordinate> pts = definition.coordinates();
         double upper = Double.NaN, lower = Double.NaN;

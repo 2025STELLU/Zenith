@@ -5,15 +5,11 @@ import java.util.List;
 import java.util.Random;
 
 /**
- * 行星尺度天气驱动（服务端权威）。
- *
- * <p>移植自 Aerodynamics4MC-Core 的 {@code WorldScaleDriver}（MIT），包名已更改。
- * 每格风 = 基流 + 行星波 + 气旋涡旋/辐散 + 对流团辐合 + 龙卷贡献，钳制 ±12 m/s。</p>
- *
- * <p>网格：384×384 pressure-domain cells，每格 256 blocks（与 L0 对齐）。</p>
+ * 行星尺度天气驱动，服务端跑的。
+ * 每格风 = 基流 + 行星波 + 气旋 + 对流团 + 龙卷，钳制 ±12 m/s。
+ * 网格 384×384，每格 256 blocks，跟 L0 对齐。
  */
 public class WorldScaleDriver {
-    // ---- 可调常量（对应原版 §2.3） ----
     public static final double SOLVER_STEP_SECONDS = 0.05;
     public static final double BASE_FLOW_RELAX_PER_SECOND = 1.0 / 900.0;
     public static final double STORM_RELAX_PER_SECOND = 1.0 / 600.0;
@@ -75,7 +71,7 @@ public class WorldScaleDriver {
 
     public WorldScaleDriver(long seed) {
         this.random = new Random(seed ^ 0x9E3779B97F4A7C15L);
-        // 北半球为正；南半球（z 大范围）取反，简单按纬度带模拟
+        // 科里奥利符号：北半球为正。南半球（z 大范围）理论上该取反，这里简化处理
         this.coriolisSign = 1.0;
         for (int i = 0; i < DEFAULT_CYCLONE_CELL_COUNT; i++) {
             cyclones.add(CycloneCell.spawn(random, GRID_CELLS));
@@ -85,26 +81,26 @@ public class WorldScaleDriver {
         }
     }
 
-    // ---------------- advance ----------------
+    // advance
 
     public void advance(double dtSeconds, double timeOfDay01, boolean raining, boolean thundering,
                         Feedback feedback) {
         timeSeconds += dtSeconds;
 
-        // 风暴活动度：松弛 + L1 反馈调制
+        // 风暴活动度：向目标松弛，目标由 L1 反馈的不稳定/切变/水汽辐合拼出来
         double target = 0.12
                 + 0.55 * clamp01(feedback.maxInstabilityProxy())
                 + 0.25 * clamp01(feedback.meanLowLevelShear() / 0.02)
                 + 0.35 * clamp01(feedback.maxPositiveMoistureConvergence() / 0.01);
         if (thundering) target = Math.max(target, 0.8);
         else if (raining) target = Math.max(target, 0.45);
-        // 夜间对流减弱
+        // 晚上对流歇一歇
         double diurnal = 0.65 + 0.35 * Math.sin(timeOfDay01 * Math.PI * 2.0 - Math.PI / 2.0);
         target *= 0.7 + 0.3 * diurnal;
         stormActivity += (clamp01(target) - stormActivity)
                 * Math.min(1.0, dtSeconds * STORM_RELAX_PER_SECOND);
 
-        // 基流目标缓慢漂移
+        // 基流目标：每隔几分钟随机换个风向风速，慢慢靠过去
         if (random.nextDouble() < dtSeconds / 300.0) {
             double ang = random.nextDouble() * Math.PI * 2.0;
             double spd = 1.5 + random.nextDouble() * 4.5;
@@ -115,7 +111,7 @@ public class WorldScaleDriver {
         baseFlowX += (forcedBaseFlowX - baseFlowX) * k;
         baseFlowZ += (forcedBaseFlowZ - baseFlowZ) * k;
 
-        // 天气间歇因子缓慢变化
+        // 天气间歇因子：随机游走，偶尔来段平静期
         synopticLull += (random.nextDouble() - 0.5) * dtSeconds * 0.02;
         synopticLull = clamp(synopticLull, SYNOPTIC_LULL_MIN_FACTOR, 1.0);
 
@@ -123,7 +119,7 @@ public class WorldScaleDriver {
         for (ConvectiveCluster c : clusters) c.advance(dtSeconds, random, GRID_CELLS, cyclones, stormActivity);
         tornadoes.removeIf(t -> !t.advance(dtSeconds));
 
-        // 龙卷生成
+        // 龙卷：在对流团里挑个宿主，条件够苛刻才生
         if (tornadoes.size() < MAX_ACTIVE_TORNADO_VORTICES
                 && stormActivity > TORNADO_MIN_STORM_ACTIVITY
                 && random.nextDouble() < dtSeconds * 0.02 * stormActivity) {
@@ -136,7 +132,7 @@ public class WorldScaleDriver {
         }
     }
 
-    // ---------------- sample ----------------
+    // sample
 
     public Sample sample(int cellX, int cellZ) {
         double phi = cellX * DRIVER_SPATIAL_SCALE_X + timeSeconds * 0.002;
@@ -163,7 +159,6 @@ public class WorldScaleDriver {
                     * (0.55 * gOuter + 1.40 * gCore) * coriolisSign * c.spin;
             double radial = 3.0 * c.intensity * (0.70 * gOuter + 1.20 * gCore) * c.inflowSign;
             double inv = r > 1e-3 ? 1.0 / r : 0;
-            // 切向 (垂直于径向) + 径向
             u += -dz * inv * swirl + dx * inv * radial;
             w += dx * inv * swirl + dz * inv * radial;
             double env = Math.max(gOuter, gCore);
@@ -228,7 +223,7 @@ public class WorldScaleDriver {
 
     private static double clamp01(double v) { return clamp(v, 0, 1); }
 
-    // ---------------- 气旋单体 ----------------
+    // 气旋单体
 
     static final class CycloneCell {
         double x, z;                 // 格坐标
@@ -255,10 +250,9 @@ public class WorldScaleDriver {
         }
 
         void advance(double dt, Random random, int gridCells) {
-            // 生命史相位：周期约 24000*2/20 秒（原版公式）
+            // 生命史相位：周期照抄原版公式（24000*2/20 秒）
             phase += dt * (Math.PI * 2.0) / (24000.0 * 2.0 / 20.0);
             intensity = 0.35 + 0.65 * (0.5 + 0.5 * Math.sin(phase));
-            // 缓慢漂移
             x += dt * 0.004 * Math.cos(phase * 0.3);
             z += dt * 0.004 * Math.sin(phase * 0.23);
             if (x < 0) x += gridCells;
@@ -268,7 +262,7 @@ public class WorldScaleDriver {
         }
     }
 
-    // ---------------- 对流团 ----------------
+    // 对流团
 
     static final class ConvectiveCluster {
         double x, z;
@@ -304,7 +298,7 @@ public class WorldScaleDriver {
         }
     }
 
-    // ---------------- 龙卷 ----------------
+    // 龙卷
 
     public static final class TornadoVortex {
         public double x, z;             // 格坐标（double 精度）
@@ -332,10 +326,8 @@ public class WorldScaleDriver {
         /** @return false 表示生命结束 */
         boolean advance(double dt) {
             ageSeconds += dt;
-            // 随宿主对流团缓慢移动
             x += dt * 0.01;
             z += dt * 0.006;
-            // 强度包络：上升-维持-衰减
             double t = ageSeconds / lifetimeSeconds;
             return t < 1.0;
         }

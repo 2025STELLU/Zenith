@@ -3,17 +3,17 @@ package net.atomos.zenith.api;
 import java.util.List;
 
 /**
- * 开放天气 API：其他模组可查询 Zenith 的天气现象与大气状态。
+ * 开放天气 API：查 Zenith 的天气现象和大气状态。
  *
- * <p>所有查询均为服务端可信数据（与玩法采样同一来源）。客户端如需使用，
- * 应通过服务端转发或使用快照数据，不得直接用于反作弊敏感判定。</p>
+ * 返回的都是服务端可信数据（跟玩法采样同一来源）。客户端要用只能走服务端
+ * 转发或快照，别拿来做反作弊判定——客户端数据不可信。
  */
 public final class ZenithWeatherApi {
     private static volatile ZenithWeatherRuntimeProvider provider;
 
     private ZenithWeatherApi() {}
 
-    /** 由 Zenith 主模组在启动时调用。 */
+    /** 主模组启动时调一次，用来绑定运行时实现。 */
     public static void bindRuntime(ZenithWeatherRuntimeProvider p) {
         provider = p;
     }
@@ -30,22 +30,18 @@ public final class ZenithWeatherApi {
 
     // ---- 天气现象 ----
 
-    /** 活跃锋面列表。 */
     public static List<ZenithFrontInfo> fronts(ZenithWorldRef world) {
         return require().fronts(world);
     }
 
-    /** 活跃尘卷风列表。 */
     public static List<ZenithDustDevilInfo> dustDevils(ZenithWorldRef world) {
         return require().dustDevils(world);
     }
 
-    /** 活跃飑线列表。 */
     public static List<ZenithSquallLineInfo> squallLines(ZenithWorldRef world) {
         return require().squallLines(world);
     }
 
-    /** 活跃台风列表。 */
     public static List<ZenithTyphoonInfo> typhoons(ZenithWorldRef world) {
         return require().typhoons(world);
     }
@@ -62,17 +58,16 @@ public final class ZenithWeatherApi {
 
     // ---- 大气状态 ----
 
-    /** 当前季节信息。 */
     public static ZenithSeasonInfo season(ZenithWorldRef world) {
         return require().season(world);
     }
 
-    /** 当前季风向量（m/s，世界坐标）。 */
+    /** 季风向量（m/s，世界坐标）。 */
     public static ZenithVec3 monsoonVector(ZenithWorldRef world) {
         return require().monsoonVector(world);
     }
 
-    /** 指定点背风波垂直速度（m/s，正=上升）。 */
+    /** 背风波垂直速度（m/s，正数=上升气流）。 */
     public static double mountainWaveLift(ZenithWorldRef world, ZenithVec3 pos) {
         return require().mountainWaveLift(world, pos);
     }

@@ -17,7 +17,7 @@ import net.minecraft.world.phys.shapes.CollisionContext;
 import net.minecraft.world.phys.shapes.VoxelShape;
 import org.jetbrains.annotations.Nullable;
 
-/** 风力涡轮探针：按本地风速输出 0–15 红石信号（原版 built-in 示例的玩法）。 */
+/** 风力涡轮探针：按本地风速输出 0–15 红石信号。 */
 public class WindTurbineProbeBlock extends Block implements EntityBlock {
     public static final IntegerProperty POWER = BlockStateProperties.POWER;
     private static final VoxelShape SHAPE = Block.box(4, 0, 4, 12, 14, 12);

@@ -1,6 +1,6 @@
 package net.atomos.zenith.api;
 
-/** L2 精细流场查询请求（诊断/工程用途）。 */
+/** L2 精细流场查询请求：诊断、调参用的，别拿去跑玩法逻辑。 */
 public final class ZenithL2Request {
     private final ZenithWorldRef world;
     private final ZenithVec3 center;

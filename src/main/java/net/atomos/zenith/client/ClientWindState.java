@@ -22,9 +22,7 @@ public final class ClientWindState implements ZenithClientWindRuntimeProvider {
         return INSTANCE;
     }
 
-    // 粗风场
     private volatile CoarseWindPacket coarseWind;
-    // 天气快照
     private volatile WeatherSnapshotPacket snapshot;
 
     private ClientWindState() {}
@@ -45,7 +43,6 @@ public final class ClientWindState implements ZenithClientWindRuntimeProvider {
         return snapshot;
     }
 
-    /** 在粗风场网格上双线性插值采样。 */
     public ZenithVec3 sampleCoarse(double x, double y, double z) {
         CoarseWindPacket pkt = coarseWind;
         if (pkt == null) return ZenithVec3.ZERO;

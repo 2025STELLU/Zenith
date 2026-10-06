@@ -9,7 +9,6 @@ import net.neoforged.neoforge.registries.DeferredRegister;
 
 import java.util.function.Supplier;
 
-/** Zenith 音效事件注册。 */
 public final class ZenithSounds {
     public static final DeferredRegister<SoundEvent> SOUND_EVENTS =
             DeferredRegister.create(Registries.SOUND_EVENT, ZenithMod.MOD_ID);

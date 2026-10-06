@@ -1,6 +1,6 @@
 package net.atomos.zenith.api;
 
-/** 力/力矩（牛顿 / 牛顿·米），绕给定参考点。 */
+/** 力/力矩（牛顿 / 牛顿·米），绕请求里给定的参考点算。 */
 public final class ZenithL2ForceMoment {
     private final ZenithVec3 force;
     private final ZenithVec3 moment;

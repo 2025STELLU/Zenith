@@ -9,15 +9,12 @@ import java.util.List;
 import java.util.Random;
 
 /**
- * 锋面系统：冷锋 / 暖锋。
+ * 锋面：冷锋和暖锋。
  *
- * <p>模型：</p>
- * <ul>
- *   <li>锋面为一条线段（锋线），冷锋/暖锋两种类型，≤4 条/维度</li>
- *   <li>冷锋：锋后降温、气压上升、风向顺转、窄降水带 + 强阵风</li>
- *   <li>暖锋：锋前大范围层状降水、风向逆转、缓慢升温</li>
- *   <li>锋线随引导气流垂直于自身移动；由强气旋催生</li>
- * </ul>
+ * 一条锋线就是一条线段，一个维度里最多 4 条。
+ * 冷锋跑得快：锋后降温、气压上升、风向顺转，带着一条窄降水带和强阵风；
+ * 暖锋是慢性子：锋前大片层状云降水，风弱，慢慢升温。
+ * 锋线沿法线方向走（被引导气流推着），强气旋过境时会催生新的锋面。
  */
 public class FrontSystem implements WeatherPhenomenon {
     public static final int MAX_FRONTS = 4;
@@ -26,14 +23,12 @@ public class FrontSystem implements WeatherPhenomenon {
 
     public static final class Front {
         public FrontType type;
-        // 锋线两端点（blocks）
-        public double x1, z1, x2, z2;
+        public double x1, z1, x2, z2; // 锋线两端点（格）
         public double ageSeconds;
         public double lifetimeSeconds = 7200 + Math.random() * 7200;
         public double intensity01 = 0.8;
-        public double moveX, moveZ; // 移动速度 m/s（垂直于锋线）
+        public double moveX, moveZ; // m/s，沿锋线法向移动
 
-        /** 点到锋线段距离。 */
         public double distanceTo(double x, double z) {
             double dx = x2 - x1, dz = z2 - z1;
             double len2 = dx * dx + dz * dz;
@@ -43,12 +38,11 @@ public class FrontSystem implements WeatherPhenomenon {
             return Math.hypot(x - (x1 + dx * t), z - (z1 + dz * t));
         }
 
-        /** 锋线法向量（指向暖区一侧）。 */
+        /** 法向量。约定：冷锋指暖区（锋前），暖锋指冷区——统一成"锋前"方向。 */
         public double[] normal() {
             double dx = x2 - x1, dz = z2 - z1;
             double len = Math.hypot(dx, dz);
             if (len < 1) return new double[]{1, 0};
-            // 冷锋：向暖区（锋前）；暖锋：向冷区——统一返回"锋前"方向
             return new double[]{-dz / len, dx / len};
         }
     }
@@ -61,7 +55,7 @@ public class FrontSystem implements WeatherPhenomenon {
     public void tick(ServerLevel level, double dtSeconds, WeatherContext ctx) {
         double stormAct = ctx.driver().stormActivity();
 
-        // 由强气旋催生锋面
+        // 强气旋催生锋面：气旋越强越容易甩出锋
         spawnAccumulator += dtSeconds * Math.max(0, stormAct - 0.35) * 0.01;
         while (spawnAccumulator >= 1.0 && fronts.size() < MAX_FRONTS) {
             spawnAccumulator -= 1.0;
@@ -85,7 +79,7 @@ public class FrontSystem implements WeatherPhenomenon {
             f.z2 = cz + Math.sin(lineAng) * halfLen;
             double steer = Math.hypot(l1s.windX(), l1s.windZ());
             double[] n = f.normal();
-            // 冷锋移向暖区，暖锋移向冷区
+            // 冷锋往暖区拱，暖锋往冷区拱——移动方向正好相反
             double dir = f.type == FrontType.COLD ? 1 : -1;
             f.moveX = n[0] * steer * 0.55 * dir;
             f.moveZ = n[1] * steer * 0.55 * dir;
@@ -103,7 +97,6 @@ public class FrontSystem implements WeatherPhenomenon {
             }
             f.x1 += f.moveX * dtSeconds; f.z1 += f.moveZ * dtSeconds;
             f.x2 += f.moveX * dtSeconds; f.z2 += f.moveZ * dtSeconds;
-            // 强度包络
             double t = f.ageSeconds / f.lifetimeSeconds;
             f.intensity01 = t < 0.2 ? t / 0.2 : t > 0.8 ? Math.max(0.2, 1 - (t - 0.8) / 0.2) : 1.0;
         }
@@ -125,13 +118,13 @@ public class FrontSystem implements WeatherPhenomenon {
             double e = band * f.intensity01;
             double[] n = f.normal();
             if (f.type == FrontType.COLD) {
-                // 冷锋：窄降水带 + 阵风 + 锋后风向顺转（用法向推力近似）
+                // 冷锋：窄降水带 + 阵风；锋后风向顺转用沿法线的推力近似一下
                 double gust = 6.0 * e;
                 acc = acc.add(new WindContribution(
                         n[0] * gust * 0.6, 0.8 * e, n[1] * gust * 0.6,
                         0.3 * e, 0.75 * e));
             } else {
-                // 暖锋：宽层状降水，风弱
+                // 暖锋：宽层状降水带，风很弱
                 acc = acc.add(new WindContribution(
                         -n[0] * 1.5 * e, 0.3 * e, -n[1] * 1.5 * e,
                         0.12 * e, 0.5 * e));

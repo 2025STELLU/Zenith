@@ -10,7 +10,6 @@ import net.neoforged.neoforge.registries.DeferredRegister;
 
 import java.util.function.Supplier;
 
-/** 方块与方块实体注册。 */
 public final class ZenithBlocks {
     public static final DeferredRegister.Blocks BLOCKS =
             DeferredRegister.createBlocks(ZenithMod.MOD_ID);

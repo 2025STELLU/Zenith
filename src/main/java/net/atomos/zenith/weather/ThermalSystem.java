@@ -11,21 +11,17 @@ import java.util.List;
 import java.util.Random;
 
 /**
- * 热对流系统：日照加热地表 → 热泡上升气流。
+ * 热对流：太阳晒热地面，热泡往上冒。
  *
- * <p>模型：</p>
- * <ul>
- *   <li>地表加热速率由地表类型决定：沙漠/岩石最快，草地中等，森林/水面最慢</li>
- *   <li>白天在玩家附近生成热气流柱：半径 8–20 格，上升 2–6 m/s，寿命 5–15 分钟</li>
- *   <li>柱内上升 + 轻微向内辐合；柱外环形下沉补偿区</li>
- *   <li>热泡强度计入 L1 不稳定度（通过采样点的上升气流体现）</li>
- * </ul>
+ * 地表越吸热热泡越容易起：沙漠/岩石最快，草地中等，森林和水面最慢。
+ * 白天在玩家附近生成热气流柱：半径 8–20 格，上升 2–6 m/s，活 5–15 分钟。
+ * 柱子里往上走、稍微往里收；柱子外面围着一圈下沉补偿区。
+ * 热泡强度会体现在 L1 不稳定度里（采样点上升气流就是这么来的）。
  */
 public class ThermalSystem implements WeatherPhenomenon {
     public static final int MAX_THERMALS = 24;
     public static final double SPAWN_RADIUS_BLOCKS = 320.0;
 
-    /** 地表类型 → 相对加热速率。 */
     public static double heatingRate(ZenithTerrainSurfaceClass surface) {
         return switch (surface) {
             case DESERT_SAND -> 1.0;
@@ -62,7 +58,7 @@ public class ThermalSystem implements WeatherPhenomenon {
 
     @Override
     public void tick(ServerLevel level, double dtSeconds, WeatherContext ctx) {
-        // 太阳高度：timeOfDay01 中 0.25=日出 0.5=正午；用正弦近似（含季节乘子）
+        // timeOfDay01 里 0.25=日出、0.5=正午，正弦近似即可
         double solar = Math.sin(ctx.timeOfDay01() * Math.PI * 2.0 - Math.PI / 2.0);
         solar = Math.max(0, solar) * (ctx.raining() ? 0.25 : 1.0)
                 * ctx.seasonInfo().solarMultiplier();
@@ -77,7 +73,7 @@ public class ThermalSystem implements WeatherPhenomenon {
             double az = anchor.getZ() + (random.nextDouble() - 0.5) * 2 * SPAWN_RADIUS_BLOCKS;
             ZenithTerrainSurfaceClass surface = ctx.terrain().surfaceAt(ax, az);
             double rate = heatingRate(surface);
-            if (random.nextDouble() > rate * 1.4) continue; // 加热慢的地表不易形成
+            if (random.nextDouble() > rate * 1.4) continue; // 地太凉，热泡起不来
             Thermal t = new Thermal();
             t.x = ax;
             t.z = az;
@@ -88,7 +84,7 @@ public class ThermalSystem implements WeatherPhenomenon {
             thermals.add(t);
         }
 
-        // 推进与消亡；热泡随低层风漂移
+        // 推进与消亡。热泡自己不走，是被低层风吹着飘的
         Iterator<Thermal> it = thermals.iterator();
         while (it.hasNext()) {
             Thermal t = it.next();
@@ -115,20 +111,19 @@ public class ThermalSystem implements WeatherPhenomenon {
         for (Thermal t : thermals) {
             double dx = x - t.x, dz = z - t.z;
             double r = Math.sqrt(dx * dx + dz * dz);
-            double groundY = 60; // 近似，运行时会用真实地形
+            double groundY = 60; // 偷懒用 60 近似，运行时换真实地形
             double topY = t.topY;
             if (y < groundY || y > topY) continue;
             double env = t.envelope();
             if (r < t.radiusBlocks) {
                 double core = 1 - (r / t.radiusBlocks) * (r / t.radiusBlocks);
                 double w = t.updraftMps * core * env;
-                // 轻微向内辐合
-                double conv = 0.4 * core * env;
+                double conv = 0.4 * core * env; // 柱内轻微向里收
                 double inv = r > 0.5 ? 1.0 / r : 0;
                 acc = acc.add(new WindContribution(
                         -dx * inv * conv, w, -dz * inv * conv, 0.15 * core * env, 0));
             } else if (r < t.radiusBlocks * 2.2) {
-                // 下沉补偿环
+                // 下沉补偿环：柱子抽上去的空气，得在外圈沉回来
                 double ring = (r - t.radiusBlocks) / (t.radiusBlocks * 1.2);
                 double sink = -0.5 * Math.sin(ring * Math.PI) * env;
                 acc = acc.add(new WindContribution(0, sink, 0, 0.05 * env, 0));

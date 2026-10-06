@@ -9,13 +9,8 @@ import net.neoforged.api.distmarker.OnlyIn;
 import java.util.Random;
 
 /**
- * 天气风控（客户端）：让降水"看得见风"。
- * <ul>
- *   <li>下雨时生成随风倾斜的雨丝粒子（用 wind_streak 加速下落）</li>
- *   <li>雷暴/台风时雨丝更密更斜，并伴随水沫</li>
- * </ul>
- * 注：原版雨的渲染通过混合器改很重，这里用自定义粒子叠加表现，
- * 不改变原版天气逻辑。
+ * 让降水"看得见风"：下雨时撒随风倾斜的雨丝，雷暴/台风天雨丝更密更斜再加点水沫。
+ * 原版雨的渲染管线动起来代价太大，这里只叠加自定义粒子，原版天气逻辑不动。
  */
 @OnlyIn(Dist.CLIENT)
 public final class WeatherWindController {
@@ -41,10 +36,9 @@ public final class WeatherWindController {
             double x = px + (RANDOM.nextDouble() - 0.5) * 40;
             double z = pz + (RANDOM.nextDouble() - 0.5) * 40;
             double y = py + 8 + RANDOM.nextDouble() * 10;
-            // 雨丝：下落 + 风
+            // 雨丝：用 spray 粒子冒充雨滴，初速带上风和下落分量
             var wind = ClientWindState.get().sampleCoarse(x, y, z);
             double fallSpeed = thundering ? 2.2 : 1.6;
-            // 用 spray 粒子模拟雨滴（给初速：风+下落）
             level.addParticle(ZenithParticles.SPRAY.get(), x, y, z,
                     wind.x() * 0.35, -fallSpeed, wind.z() * 0.35);
         }

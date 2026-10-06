@@ -2,7 +2,7 @@ package net.atomos.zenith.api;
 
 import java.util.Objects;
 
-/** 命名空间标识（namespace:path），与 Minecraft ResourceLocation 同构但无 MC 依赖。 */
+/** 命名空间标识（namespace:path），跟 MC 的 ResourceLocation 一个意思，只是这边不碰 MC 的类。 */
 public final class ZenithId {
     private final String namespace;
     private final String path;

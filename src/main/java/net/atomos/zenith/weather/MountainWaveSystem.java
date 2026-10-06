@@ -4,17 +4,14 @@ import net.atomos.zenith.wind.SeedTerrainProvider;
 import net.minecraft.server.level.ServerLevel;
 
 /**
- * 地形背风波系统：气流过山产生的驻波 + 转子。
+ * 地形背风波：风翻过山脊之后在山后激起的驻波，还有山脚下的转子湍流。
  *
- * <p>模型（解析诊断，无离散对象）：</p>
- * <ul>
- *   <li>沿上风方向搜索 800 格内的最高地形点作为山脊</li>
- *   <li>山脊显著（高差 >25 格）且风速 >3 m/s 时形成驻波</li>
- *   <li>波长 λ = 2π·U/N（N≈0.012 s⁻¹，钳制 40–220 格）</li>
- *   <li>垂直速度 w = A·sin(2π·d/λ)·exp(−agl/350)，A ∝ 山高×风速</li>
- *   <li>山后近地面转子区：强湍流</li>
- *   <li>滑翔机可利用波峰上升气流（与热对流互补）</li>
- * </ul>
+ * 解析式诊断，没有离散对象：沿上风方向扫 800 格找最高点当山脊；
+ * 山够高（高差 >25 格）且风够快（>3 m/s）才起波。
+ * 波长按内重力波公式 λ = 2π·U/N 来算（N 取 0.012 s⁻¹，钳在 40–220 格），
+ * 垂直速度 w = A·sin(2π·d/λ)·exp(−agl/350)，振幅跟山高和风速成正比。
+ * 山后近地面还有转子区——一坨强湍流，滑翔机飞进去会很难受，
+ * 但波峰的上升气流倒是可以借来爬升，跟热对流互补。
  */
 public class MountainWaveSystem implements WeatherPhenomenon {
     private static final double BRUNT_VAISALA_N = 0.012; // s^-1
@@ -55,10 +52,9 @@ public class MountainWaveSystem implements WeatherPhenomenon {
         double hDecay = Math.exp(-agl / 350.0);
 
         double w = amplitude * Math.sin(phase) * hDecay;
-        // 水平风速调制
         double speedMod = 1.0 + 0.15 * Math.cos(phase) * hDecay;
 
-        // 转子：山后近地面强湍流
+        // 转子：山后低空的一坨强湍流，离山越近越低越颠
         double rotorTurb = 0;
         if (agl < 120 && crestDist < 600) {
             rotorTurb = 0.45 * Math.exp(-crestDist / 300.0) * (1 - agl / 120.0);

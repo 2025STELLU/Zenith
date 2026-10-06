@@ -10,7 +10,6 @@ import net.neoforged.neoforge.registries.DeferredItem;
 import net.neoforged.neoforge.registries.DeferredRegister;
 import net.minecraft.core.registries.Registries;
 
-/** 物品注册。 */
 public final class ZenithItems {
     public static final DeferredRegister.Items ITEMS =
             DeferredRegister.createItems(ZenithMod.MOD_ID);

@@ -11,8 +11,8 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
 
 /**
- * 风向标方块实体：服务端每 20 tick 采样风向并同步角度（度），
- * 客户端每 tick 用本地风做平滑旋转。
+ * 风向标方块实体：服务端和客户端各自每 20 tick 采样本地风，
+ * 箭头慢慢转过去。不跨端同步，客户端自采样就行。
  */
 public class WindVaneBlockEntity extends BlockEntity {
     /** 箭头 yaw（度），0 = 朝南（+Z），与 atan2 约定一致。 */
@@ -47,7 +47,7 @@ public class WindVaneBlockEntity extends BlockEntity {
         while (delta < -180) delta += 360;
         arrowYawDegrees += delta * 0.25f;
         if (level.isClientSide) {
-            // 客户端本地平滑即可；服务端角度通过方块实体同步包下发（简化：不同步，客户端自采样）
+            // 不做跨端同步：客户端自己采样本地风，转过去就行
         }
     }
 

@@ -5,16 +5,15 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 
 /**
- * 海风系统：海陆温差驱动的日循环局地环流。
+ * 海风：海陆温差搞出来的日循环局地环流。
  *
- * <p>模型：</p>
- * <ul>
- *   <li>白天（~10:00–16:00 峰值）：海风由海向陆，最大 ~5 m/s，随离岸距离与高度衰减</li>
- *   <li>夜间：陆风由陆向海，较弱（~2 m/s）</li>
- *   <li>海风锋：白天向内陆推进的辐合线，锋面附近湍流增强 + 积云发展</li>
- *   <li>只在近岸带（~400 格）与低空（<150 格 AGL）有效</li>
- * </ul>
- * <p>实现：每 tick 在焦点周围计算 33×33 @64 格的海风场，采样时双线性插值。</p>
+ * 白天（10 点到 16 点最强）海风从海上往陆上吹，最大 5 m/s；
+ * 夜间反过来，陆风往海上吹，弱一些（2 m/s）。
+ * 白天还有一条"海风锋"在往内陆推进——辐合线，锋面附近湍流大、容易起积云。
+ * 只在近岸 400 格内、150 格 AGL 以下有效。
+ *
+ * 实现上偷个懒：每 tick 在玩家周围算一张 33×33（64 格步长）的海风场，
+ * 采样时双线性插值，海岸线反正不会动，100 tick 重算一次就行。
  */
 public class SeaBreezeSystem implements WeatherPhenomenon {
     public static final int GRID = 33;
@@ -40,15 +39,14 @@ public class SeaBreezeSystem implements WeatherPhenomenon {
         focusX = anchor.getX();
         focusZ = anchor.getZ();
 
-        // 日循环：solar>0 为白天
         double solar = Math.sin(ctx.timeOfDay01() * Math.PI * 2.0 - Math.PI / 2.0);
         double dayFactor = clamp01(solar * 1.6);          // 白天强度
         double nightFactor = clamp01(-solar * 1.8);      // 夜间强度
-        // 海风锋推进/回退（每 tick 更新）
+        // 白天海风锋往内陆推，晚上再缩回去
         if (dayFactor > 0.15) frontInlandDistance = Math.min(320, frontInlandDistance + FRONT_SPEED_MPS * dtSeconds * dayFactor);
         else frontInlandDistance = Math.max(0, frontInlandDistance - FRONT_SPEED_MPS * 2.2 * dtSeconds);
 
-        // 海岸场每 100 tick 重算一次（海岸线不动，重算很贵）
+        // 海岸线不会动，这场每 100 tick 重算一次就行（全量重算挺贵的）
         if (hasField && ctx.tick() % 100 != 0) return;
 
         for (int i = 0; i < GRID; i++) {
@@ -56,13 +54,13 @@ public class SeaBreezeSystem implements WeatherPhenomenon {
                 double bx = focusX + (i - GRID / 2) * CELL;
                 double bz = focusZ + (j - GRID / 2) * CELL;
                 double[] coast = findCoast(ctx, bx, bz);
-                double distToCoast = coast[0];   // >0 在陆地距海岸距离；<0 在海上
-                double seaDirX = coast[1], seaDirZ = coast[2]; // 指向海洋的单位向量
+                double distToCoast = coast[0]; // 陆地为正、海上为负的离岸距离
+                double seaDirX = coast[1], seaDirZ = coast[2];
                 double u = 0, w = 0, front = 0;
                 if (distToCoast < 900) {
                     double decay = Math.exp(-Math.abs(distToCoast) / INLAND_DECAY_BLOCKS);
                     if (distToCoast >= 0) {
-                        // 陆地：白天海风（由海向陆 = -seaDir），夜间陆风（由陆向海 = +seaDir）
+                        // 陆地侧：白天海风从海上吹进来，晚上陆风吹出去
                         double breeze = MAX_BREEZE_MPS * dayFactor - MAX_LANDBREEZE_MPS * nightFactor;
                         u = -seaDirX * breeze * decay;
                         w = -seaDirZ * breeze * decay;
@@ -70,7 +68,7 @@ public class SeaBreezeSystem implements WeatherPhenomenon {
                         double dFront = Math.abs(distToCoast - frontInlandDistance);
                         front = Math.exp(-dFront * dFront / (60 * 60)) * dayFactor;
                     } else {
-                        // 海上：海风环流的补偿下沉区，风较弱
+                        // 海上是海风环流的补偿下沉区，风弱
                         double breeze = MAX_BREEZE_MPS * 0.4 * dayFactor;
                         u = -seaDirX * breeze * decay;
                         w = -seaDirZ * breeze * decay;
@@ -84,24 +82,19 @@ public class SeaBreezeSystem implements WeatherPhenomenon {
         hasField = true;
     }
 
-    /**
-     * 找最近海岸。
-     * @return {distToCoast（陆地为正/海上为负）, seaDirX, seaDirZ（指向海洋的单位向量）}
-     */
+    /** 8 个方向放射找最近的海岸线。返回 {离岸距离（陆地正/海上负）, 指向海洋的单位向量 x, z}。 */
     private double[] findCoast(WeatherContext ctx, double bx, double bz) {
         boolean land = !ctx.terrain().isOceanAt(bx, bz);
         double bestDist = Double.MAX_VALUE;
         double seaX = 0, seaZ = 0;
-        // 8 方向放射搜索
         for (int d = 0; d < 8; d++) {
             double ang = d * Math.PI / 4.0;
             double dx = Math.cos(ang), dz = Math.sin(ang);
             for (double r = 32; r <= 480; r += 32) {
                 boolean ocean = ctx.terrain().isOceanAt(bx + dx * r, bz + dz * r);
-                if (ocean == land) { // 找到海陆分界
+                if (ocean == land) { // 扫到海陆分界
                     if (r < bestDist) {
                         bestDist = r;
-                        // seaDir：从采样点指向海洋
                         if (land) { seaX = dx; seaZ = dz; }
                         else { seaX = -dx; seaZ = -dz; }
                     }
@@ -133,12 +126,11 @@ public class SeaBreezeSystem implements WeatherPhenomenon {
         double w = bilerp(breezeW, i0, j0, fx, fz);
         double front = bilerp(frontFactor, i0, j0, fx, fz);
         if (u == 0 && w == 0 && front == 0) return WindContribution.NONE;
-        // 高度衰减（AGL 近似：用 y-64）
+        // AGL 用 y-64 近似
         double agl = Math.max(0, y - 64);
         double hDecay = Math.exp(-agl / MAX_HEIGHT_AGL);
         double turb = front * 0.35 * hDecay;
-        // 锋面辐合 → 轻微上升
-        double vy = front * 1.2 * hDecay;
+        double vy = front * 1.2 * hDecay; // 锋面辐合，顶出一点上升气流
         return new WindContribution(u * hDecay, vy, w * hDecay, turb, front * 0.3);
     }
 

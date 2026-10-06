@@ -19,7 +19,6 @@ import net.neoforged.api.distmarker.OnlyIn;
 public final class ZenithParticleProviders {
     private ZenithParticleProviders() {}
 
-    /** 基类：随风漂移的纹理粒子。 */
     abstract static class WindDrivenParticle extends TextureSheetParticle {
         protected WindDrivenParticle(ClientLevel level, double x, double y, double z,
                                      SpriteSet sprites) {
@@ -27,7 +26,7 @@ public final class ZenithParticleProviders {
             setSpriteFromAge(sprites);
         }
 
-        /** 叠加风场漂移（子类先设好基础速度后调用）。 */
+        /** 先设好基础速度再调这个叠风。 */
         protected void applyWind(double factor, double updraftBonus) {
             var v = ClientWindState.get().sampleCoarse(x, y, z);
             this.xd += v.x() * factor * 0.05;
@@ -56,7 +55,6 @@ public final class ZenithParticleProviders {
                     this.quadSize = 0.12f;
                     setColor(1f, 1f, 1f);
                     setAlpha(0.35f);
-                    // 初速 = 风速
                     var v = ClientWindState.get().sampleCoarse(x, y, z);
                     this.xd = v.x() * 0.9;
                     this.yd = v.y() * 0.9;
@@ -67,7 +65,6 @@ public final class ZenithParticleProviders {
                 public void tick() {
                     super.tick();
                     applyWind(0.35, 0);
-                    // 速度钳制
                     double sp = Math.sqrt(xd * xd + zd * zd);
                     if (sp > 3.0) {
                         xd *= 3.0 / sp;
@@ -111,7 +108,6 @@ public final class ZenithParticleProviders {
                     spin += 6;
                     oRoll = roll;
                     roll = (float) Math.toRadians(spin);
-                    // 飘摆
                     this.xd += Math.sin(age * 0.3) * 0.004;
                 }
             };
@@ -140,7 +136,6 @@ public final class ZenithParticleProviders {
                 public void tick() {
                     super.tick();
                     applyWind(1.0, 0);
-                    // 膨胀变淡
                     this.quadSize += 0.02f;
                     setAlpha(Math.max(0, alpha - 0.008f));
                 }
@@ -224,7 +219,6 @@ public final class ZenithParticleProviders {
         }
     }
 
-    /** 注册所有提供者（RegisterParticleProvidersEvent 调用）。 */
     public static void registerAll(
             net.neoforged.neoforge.client.event.RegisterParticleProvidersEvent event) {
         event.registerSpriteSet(ZenithParticles.WIND_STREAK.get(), WindStreakProvider::new);

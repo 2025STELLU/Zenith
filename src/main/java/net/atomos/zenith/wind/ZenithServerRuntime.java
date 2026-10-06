@@ -65,18 +65,15 @@ import java.util.Map;
 /**
  * Zenith 服务端运行时：多层风场系统的总编排。
  *
- * <p>移植自 Aerodynamics4MC-Core 的 {@code AeroServerRuntime}（MIT），
- * native LBM 部分替换为纯 Java {@link LocalFlowSolver}。</p>
+ * native LBM 那块换成了纯 Java 的 {@link LocalFlowSolver}，省得编译原生库。
  *
- * <p>每 tick 编排：</p>
- * <ol>
- *   <li>收集 L1 诊断 → 反馈给驱动器</li>
- *   <li>{@code WorldScaleDriver.advance}（每 tick，dt=0.05s）</li>
- *   <li>天气现象 tick（热对流/海风/风暴/台风）</li>
- *   <li>{@code BackgroundMetGrid.refresh}（每 256 tick）</li>
- *   <li>{@code MesoscaleGrid.refresh}（每 64 tick）</li>
- *   <li>广播粗风场包（每 40 tick）与天气快照包（每 100 tick）</li>
- * </ol>
+ * 每 tick 干这些事：
+ *   1. 收集 L1 诊断 → 反哺驱动器
+ *   2. WorldScaleDriver.advance（每 tick，dt=0.05s）
+ *   3. 天气现象 tick（热对流/海风/风暴/台风/锋面/尘卷风/飑线/背风波/季风）
+ *   4. BackgroundMetGrid.refresh（每 256 tick）
+ *   5. MesoscaleGrid.refresh（每 64 tick）
+ *   6. 广播：粗风场包（每 40 tick）+ 天气快照包（每 100 tick）
  */
 public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
         net.atomos.zenith.api.ZenithTerrainProvider,
@@ -108,7 +105,6 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
         return INSTANCE;
     }
 
-    /** 单维度状态。 */
     public static final class DimensionState {
         final WorldScaleDriver driver;
         final BackgroundMetGrid l0;
@@ -171,7 +167,7 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
         });
     }
 
-    // ---------------- tick 编排 ----------------
+    // tick 编排
 
     @SubscribeEvent
     public void onServerTick(ServerTickEvent.Post event) {
@@ -186,7 +182,7 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
         long tick = level.getGameTime();
         double dt = SOLVER_STEP_SECONDS;
 
-        // 焦点：玩家平均位置（无玩家则用出生点）
+        // 焦点取玩家平均位置，没人在线就用出生点
         updateFocus(level, s);
 
         double timeOfDay = (level.getDayTime() % 24000L) / 24000.0;
@@ -250,7 +246,7 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
         }
     }
 
-    // ---------------- 采样实现 ----------------
+    // 采样实现
 
     @Override
     public ZenithWindSample sample(ZenithWorldRef world, ZenithVec3 position, SamplePolicy policy) {
@@ -265,7 +261,7 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
 
     @Override
     public net.atomos.zenith.api.ZenithTerrainSample sample(ZenithWorldRef world, ZenithBlockPos pos) {
-        // 地形采样：暂返回未知，待接入实际地形高度查询
+        // 地形采样还没接真实高度查询，先返回未知
         return net.atomos.zenith.api.ZenithTerrainSample.unknown();
     }
 
@@ -311,7 +307,7 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
             vz *= (1 - eyeDamp);
         }
 
-        // L2 本地修正（服务端也计算，用于 gameplay 遮蔽/绕流）
+        // L2 本地修正：服务端也算一份，gameplay 的遮蔽/绕流就靠它
         LocalFlowSolver.LocalFlow l2 = s.l2.solve(x, y, z, vx, vy, vz);
 
         double turb = l1.turbulenceIntensity() >= 0
@@ -334,13 +330,13 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
 
     @Override
     public ZenithL2Result runL2(ZenithL2Request request) {
-        // L2-lite 诊断：返回零力矩占位（诊断用）
+        // L2-lite 诊断接口：先给个零力矩占位
         return ZenithL2Result.of(net.atomos.zenith.api.ZenithL2ForceMoment.zero());
     }
 
     /**
-     * 翼型极线生成器（薄翼型理论 + 失速模型，原版用 LBM 数值计算）。
-     * cl = 2π(α−α0)·AR修正；失速后按平板模型衰减；cd = cd0 + k·cl²。
+     * 翼型极线生成器：薄翼型理论 + 失速模型（原版是 LBM 数值算的，这里解析式代替）。
+     * cl = 2π(α−α0)·有限翼展修正；过了失速角按平板模型衰减；cd = cd0 + k·cl²。
      */
     @Override
     public ZenithPolarResult runPolar(ZenithPolarRequest request) {
@@ -365,7 +361,7 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
                 if (Math.abs(alpha) <= stallAngle) {
                     cl = clAttached;
                 } else {
-                    // 失速：按 sin(2α) 平板模型混合衰减
+                    // 失速：sin(2α) 平板模型和附着流按指数混合着来
                     double over = Math.abs(alpha) - stallAngle;
                     double flatPlate = 1.9 * Math.sin(Math.toRadians(2 * alpha));
                     cl = Math.signum(clAttached)
@@ -401,7 +397,7 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
         return ZenithTerrainSample.unknown();
     }
 
-    // ---------------- 热源缓存 ----------------
+    // 热源缓存
 
     private List<LocalFlowSolver.HeatSource> heatNear(DimensionState s, double x, double y, double z,
                                                       double radius) {
@@ -448,7 +444,7 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
         return 0;
     }
 
-    // ---------------- 网络广播 ----------------
+    // 网络广播
 
     private void broadcastCoarseWind(ServerLevel level, DimensionState s) {
         for (ServerPlayer player : level.players()) {
@@ -476,7 +472,7 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
     private void broadcastWeatherSnapshot(ServerLevel level, DimensionState s) {
         var typhoons = s.typhoons.typhoons();
         var storms = s.storms.cells();
-        // 湿度：取焦点处 L1 采样
+        // 湿度就取焦点处的 L1 采样
         var l1sample = s.l1.sample(s.focusX, 80, s.focusZ);
         WeatherSnapshotPacket pkt = WeatherSnapshotPacket.build(
                 s.driver.stormActivity(), s.driver.activeTornadoCount(),
@@ -489,7 +485,7 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
         }
     }
 
-    // ---------------- ZenithWeatherRuntimeProvider ----------------
+    // ZenithWeatherRuntimeProvider 接口实现
 
     private DimensionState stateFor(net.atomos.zenith.api.ZenithWorldRef worldRef) {
         MinecraftServer server = net.neoforged.neoforge.server.ServerLifecycleHooks.getCurrentServer();
@@ -613,7 +609,7 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
         return s.mountainWaves.sample(pos.x(), pos.y(), pos.z(), l1.windX(), l1.windZ()).vy();
     }
 
-    // ---------------- 地形适配器 ----------------
+    // 地形适配器
 
     /**
      * MC 地形适配器：区块已加载用真实数据，否则回退哈希估计。
@@ -669,7 +665,7 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
             } else {
                 t = 0.7f;
             }
-            return 273.15 + t * 30.0; // 粗略映射到开尔文
+            return 273.15 + t * 30.0; // 生物群系温度是 0~1 左右的数，粗略换算成开尔文
         }
 
         @Override
@@ -719,7 +715,7 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
         }
     }
 
-    // ---------------- 诊断 ----------------
+    // 诊断
 
     public DimensionState debugState(ResourceKey<Level> dim) {
         return dimensions.get(dim);

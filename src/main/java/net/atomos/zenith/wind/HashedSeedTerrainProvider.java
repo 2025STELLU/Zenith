@@ -19,10 +19,10 @@ public class HashedSeedTerrainProvider implements SeedTerrainProvider {
         double hills = NoiseUtil.fbm2(blockX * 0.0011, blockZ * 0.0011, 3, seed + 77);
         double mountains = Math.max(0, NoiseUtil.fbm2(blockX * 0.00045 + 31.7, blockZ * 0.00045, 3, seed + 913) - 0.62) * 3.2;
         double h = 62 + (continent - 0.5) * 36 + (hills - 0.5) * 22 + mountains * 60;
-        // 海洋洼地
+        // 洋面洼地：噪声超过阈值的地方扣成海
         double oceanMask = NoiseUtil.fbm2(blockX * 0.00008 + 911.2, blockZ * 0.00008, 2, seed + 551);
         if (oceanMask > 0.62) {
-            h = 62 - (oceanMask - 0.62) * 90; // 海底
+            h = 62 - (oceanMask - 0.62) * 90;
         }
         return h;
     }

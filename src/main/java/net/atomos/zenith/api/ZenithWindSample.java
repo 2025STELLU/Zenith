@@ -1,16 +1,14 @@
 package net.atomos.zenith.api;
 
 /**
- * 单点风场采样结果。包含平均风、阵风、有效风（平均+阵风+本地修正）及大气诊断量。
+ * 单点风场采样结果：平均风、阵风、有效风（平均+阵风+本地修正），外加一堆大气诊断量。
  *
- * <p>信任规则：只有 {@link #isTrustedForGameplay()} 为 true 的采样可用于服务端游戏玩法
- * （实体受力、红石、伤害等）。客户端本地 L2 数据永远不可用于服务端玩法。</p>
+ * 信任规则：只有 isTrustedForGameplay() 为 true 的采样才能用在服务端玩法
+ * （实体受力、红石、伤害等）。客户端本地 L2 数据永远别拿去算玩法，防作弊。
  */
 public final class ZenithWindSample {
-    /** 数据来源层级。 */
     public enum Source { NONE, L0_BACKGROUND, L1_COARSE, L2_LOCAL }
 
-    /** 数据权威级别。 */
     public enum Authority { UNKNOWN, SERVER_AUTHORITATIVE, CLIENT_LOCAL }
 
     private final ZenithVec3 meanVelocity;

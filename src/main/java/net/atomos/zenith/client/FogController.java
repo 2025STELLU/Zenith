@@ -9,16 +9,14 @@ import net.neoforged.neoforge.client.event.ViewportEvent;
 
 import java.util.Random;
 
-/**
- * 客户端雾控制器：根据气象条件动态调整雾效 + 生成雾气粒子。
- */
+/** 客户端雾控制器：按气象条件调雾 + 撒雾气粒子。 */
 public final class FogController {
     private static final Random RANDOM = new Random();
     private static int tickCounter = 0;
 
     private FogController() {}
 
-    /** 当前相机处雾浓度 [0,1]（供其他客户端模块查询）。 */
+    /** 相机处雾浓度 0~1，给别的客户端模块查。 */
     public static double currentDensity = 0;
 
     public static void onComputeFog(ViewportEvent.RenderFog event) {
@@ -31,7 +29,7 @@ public final class FogController {
         var wind = ClientWindState.get().sampleCoarse(x, y, z);
         double windSpeed = Math.hypot(wind.x(), wind.z());
 
-        // 湿度：用快照近似（无快照时取 0.6）
+        // 湿度从天气快照取，包没到之前先按 0.6 估
         double humidity = 0.6;
         var snap = ClientWindState.get().snapshot();
         if (snap != null) humidity = snap.humidity01();
@@ -61,7 +59,6 @@ public final class FogController {
         return state.getFluidState().is(net.minecraft.tags.FluidTags.WATER);
     }
 
-    /** 客户端 tick：浓雾时在玩家周围生成雾气粒子。 */
     public static void clientTick() {
         Minecraft mc = Minecraft.getInstance();
         if (mc.level == null || mc.player == null) return;
@@ -73,7 +70,6 @@ public final class FogController {
             double x = p.getX() + (RANDOM.nextDouble() - 0.5) * 36;
             double z = p.getZ() + (RANDOM.nextDouble() - 0.5) * 36;
             double y = p.getY() + RANDOM.nextDouble() * 6 - 1;
-            // spray 粒子呈雾白色，低速漂移
             mc.level.addParticle(ZenithParticles.SPRAY.get(), x, y, z, 0.15, 0.02, 0.15);
         }
     }

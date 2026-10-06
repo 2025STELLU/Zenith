@@ -1,6 +1,6 @@
 package net.atomos.zenith.api;
 
-/** L2 精细流场查询结果：合力/合力矩（诊断用）。 */
+/** L2 查询结果：合力/合力矩（诊断用）。 */
 public final class ZenithL2Result {
     private final boolean supported;
     private final ZenithL2ForceMoment forceMoment;

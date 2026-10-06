@@ -3,13 +3,9 @@ package net.atomos.zenith.entity;
 /**
  * 帆船物理：视风 × 帆角 × 迎角 → 驱动力。
  *
- * <p>简化模型：</p>
- * <ul>
- *   <li>视风 A = 真风 − 船速</li>
- *   <li>受风角（风向与船艏夹角）：&lt;30° 为逆风死区，~90° 横风最快</li>
- *   <li>驱动力 F = ½ρ|A|²·帆面积·driveCoeff·帆 trim</li>
- *   <li>船体阻力 ∝ v²；横向水阻力大 → 自然产生迎风偏航（leeway 小）</li>
- * </ul>
+ * 简化模型：视风 A = 真风 − 船速；受风角（风向与船艏夹角）<30° 是逆风死区，
+ * ~90° 横风最快；驱动力 F = ½ρ|A|²·帆面积·driveCoeff·帆 trim；
+ * 船体阻力 ∝ v²；横向水阻力大，横漂（leeway）自然就小。
  */
 public final class SailingPhysics {
     private SailingPhysics() {}
@@ -20,7 +16,7 @@ public final class SailingPhysics {
     public static final double LATERAL_RESISTANCE_K = 320.0;
     public static final double NO_GO_ZONE_RADIANS = Math.toRadians(30);
 
-    /** 单步物理推进（dt 秒），返回加速度 (ax, az)。 */
+    /** 单步物理推进（dt 秒），返回 (ax, az, driveCoeff)。 */
     public static double[] step(
             double windX, double windZ,       // 真风 m/s
             double velX, double velZ,         // 当前船速 m/s

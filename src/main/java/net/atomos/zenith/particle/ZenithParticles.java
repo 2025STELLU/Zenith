@@ -7,7 +7,6 @@ import net.neoforged.neoforge.registries.DeferredRegister;
 
 import java.util.function.Supplier;
 
-/** 粒子类型注册。 */
 public final class ZenithParticles {
     public static final DeferredRegister<ParticleType<?>> PARTICLE_TYPES =
             DeferredRegister.create(net.minecraft.core.registries.Registries.PARTICLE_TYPE, ZenithMod.MOD_ID);

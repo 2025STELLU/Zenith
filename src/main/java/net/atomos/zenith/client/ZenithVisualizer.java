@@ -30,7 +30,6 @@ public final class ZenithVisualizer {
         if (level == null || mc.player == null || mc.isPaused()) return;
 
         double px = mc.player.getX(), py = mc.player.getY(), pz = mc.player.getZ();
-        // 在 5×5×3 网格上播种
         for (int i = 0; i < 4; i++) {
             double x = px + (RANDOM.nextDouble() - 0.5) * 48;
             double y = py + (RANDOM.nextDouble() - 0.5) * 16;

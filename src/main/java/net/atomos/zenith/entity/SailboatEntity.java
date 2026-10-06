@@ -88,7 +88,7 @@ public class SailboatEntity extends Entity {
         double[] acc = SailingPhysics.step(windX, windZ, velX, velZ, headingRadians, sailTrim, rudder);
         velX += acc[0] * dt;
         velZ += acc[1] * dt;
-        // 水阻尼上限
+        // 船速上限 14 m/s
         double spd = Math.hypot(velX, velZ);
         if (spd > 14) {
             velX *= 14 / spd;
@@ -105,7 +105,6 @@ public class SailboatEntity extends Entity {
         for (int dy = 2; dy >= -3; dy--) {
             BlockPos p = pos.offset(0, dy, 0);
             if (level().getFluidState(p).is(Fluids.WATER)) {
-                // 向上找到水面
                 while (level().getFluidState(p.above()).is(Fluids.WATER)) p = p.above();
                 return p.getY() + 1 - level().getFluidState(p).getOwnHeight();
             }

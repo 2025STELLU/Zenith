@@ -1,26 +1,17 @@
 package net.atomos.zenith.weather;
 
 /**
- * 雾浓度模型（服务端/客户端共享的纯函数）。
+ * 雾浓度模型，服务端客户端共用，纯函数。
  *
- * <p>三种雾：</p>
- * <ul>
- *   <li>辐射雾：夜间晴空 + 弱风 + 高湿，浓度最高</li>
- *   <li>平流雾：暖湿气流经过冷水面</li>
- *   <li>雨雾：降雨 + 近饱和湿度，浓度较低</li>
- * </ul>
+ * 三种雾怎么来的：
+ *   辐射雾：夜间晴空 + 风弱 + 湿度高，地表辐射降温凝起来的，最浓；
+ *   平流雾：暖湿空气吹过冷水面被冷却，沿海常见；
+ *   雨雾：下雨 + 湿度近饱和时顺带起一点，不浓。
  */
 public final class FogModel {
     private FogModel() {}
 
-    /**
-     * @param solar01        太阳高度因子 [0,1]（0=夜）
-     * @param raining        是否降雨
-     * @param windSpeedMps   地面风速
-     * @param humidity01     相对湿度 [0,1]
-     * @param overWater      是否在水面上方
-     * @return 雾浓度 [0,1]
-     */
+    /** 输入都归一化过，输出雾浓度 [0,1]。 */
     public static double density(double solar01, boolean raining,
                                  double windSpeedMps, double humidity01,
                                  boolean overWater) {

@@ -39,7 +39,7 @@ public class DuctBlockEntity extends BlockEntity {
             JetSourceRegistry.unregisterAt(ox, oy, oz);
             return;
         }
-        // 沿风道朝向接力（取风速大小，方向按风道）
+        // 接力：取风的大小，方向听风道的
         JetSourceRegistry.register(new LocalFlowSolver.Jet(
                 ox, oy, oz,
                 facing.getStepX(), facing.getStepY(), facing.getStepZ(),

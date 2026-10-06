@@ -9,16 +9,12 @@ import java.util.List;
 import java.util.Random;
 
 /**
- * 飑线系统：线状强对流 + 下击暴流。
+ * 飑线：一条移动的线状强对流，附带下击暴流。
  *
- * <p>模型：</p>
- * <ul>
- *   <li>一条移动的对流线（线段），≤2 条/维度，长度 200–600 格</li>
- *   <li>线上有强降水核心带 + 频繁闪电</li>
- *   <li>线前阵风锋：径向外流 15–20 m/s（比单体更强更宽）</li>
- *   <li>下击暴流：线上随机嵌入强下沉核（−10 m/s，半径 30 格），触地外流</li>
- *   <li>生成需要高风暴活动度 + 强低层风切变</li>
- * </ul>
+ * 一个维度最多 2 条，长度 200–600 格。线上是强降水核心带 + 频繁闪电；
+ * 线前顶着阵风锋，径向外流 15–20 m/s，比单体雷暴更强更宽；
+ * 线上还随机嵌着下击暴流核（下沉 −10 m/s、半径 30 格），砸到地面再向外流。
+ * 生成条件：风暴活动度高 + 低层风切变强。
  */
 public class SquallLineSystem implements WeatherPhenomenon {
     public static final int MAX_LINES = 2;
@@ -55,13 +51,12 @@ public class SquallLineSystem implements WeatherPhenomenon {
             return Math.hypot(x - (x1 + dx * t), z - (z1 + dz * t));
         }
 
-        /** 线法向量（指向移动/阵风锋方向）。 */
+        /** 线法向量，保证指向移动/阵风锋那一侧。 */
         public double[] frontNormal() {
             double dx = x2 - x1, dz = z2 - z1;
             double len = Math.hypot(dx, dz);
             if (len < 1) return new double[]{1, 0};
             double nx = -dz / len, nz = dx / len;
-            // 使法向量与移动方向一致
             if (nx * moveX + nz * moveZ < 0) {
                 nx = -nx;
                 nz = -nz;
@@ -114,7 +109,6 @@ public class SquallLineSystem implements WeatherPhenomenon {
             l.x1 += l.moveX * dtSeconds; l.z1 += l.moveZ * dtSeconds;
             l.x2 += l.moveX * dtSeconds; l.z2 += l.moveZ * dtSeconds;
 
-            // 下击暴流生成/消亡
             if (random.nextDouble() < dtSeconds * 0.02 && l.microbursts.size() < 6) {
                 double t = random.nextDouble();
                 Microburst mb = new Microburst();
@@ -128,7 +122,6 @@ public class SquallLineSystem implements WeatherPhenomenon {
                 return mb.ageSeconds >= mb.lifetimeSeconds;
             });
 
-            // 闪电
             l.lightningTimer -= dtSeconds;
             if (l.lightningTimer <= 0) {
                 l.lightningTimer = 2 + random.nextDouble() * 6;
@@ -161,20 +154,18 @@ public class SquallLineSystem implements WeatherPhenomenon {
         for (SquallLine l : lines) {
             double d = l.distanceTo(x, z);
             double[] n = l.frontNormal();
-            // 锋前符号：点在线法向一侧为正
             double t = projectionT(l, x, z);
             double px = l.x1 + (l.x2 - l.x1) * t, pz = l.z1 + (l.z2 - l.z1) * t;
-            double ahead = (x - px) * n[0] + (z - pz) * n[1];
+            double ahead = (x - px) * n[0] + (z - pz) * n[1]; // >0 表示在线前侧
             double e = l.intensity01;
 
             if (d < 90) {
-                // 对流线核心：强降水 + 湍流
+                // 对流线核心：强降水 + 大湍流
                 double core = Math.exp(-(d * d) / (60 * 60));
                 acc = acc.add(new WindContribution(0, -2.0 * core * e, 0,
                         0.5 * core * e, 0.95 * e));
             }
             if (ahead > 0 && ahead < 160) {
-                // 阵风锋外流
                 double gust = 18.0 * Math.exp(-ahead / 90.0) * e;
                 acc = acc.add(new WindContribution(
                         n[0] * gust, 0.3 * gust * 0.3, n[1] * gust,
@@ -188,11 +179,10 @@ public class SquallLineSystem implements WeatherPhenomenon {
                 double menv = mb.envelope() * e;
                 if (mr < mb.radiusBlocks) {
                     double core = 1 - mr / mb.radiusBlocks;
-                    // 强下沉
                     acc = acc.add(new WindContribution(0, -10.0 * core * menv, 0,
                             0.5 * core * menv, 0.6 * menv));
                 } else {
-                    // 触地外流
+                    // 下沉气流砸到地面，向外流
                     double ring = (mr - mb.radiusBlocks) / (mb.radiusBlocks * 1.5);
                     double out = 14.0 * Math.sin(Math.min(1, ring) * Math.PI) * menv;
                     double inv = mr > 0.5 ? 1.0 / mr : 0;

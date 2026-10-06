@@ -10,10 +10,12 @@ import java.util.List;
 import java.util.Random;
 
 /**
- * 尘卷风系统：晴热小尺度地面涡旋。
+ * 尘卷风：晴天热出来的地面小涡旋。
  *
- * <p>模型：沙漠/热地表 + 大太阳 + 弱背景风时生成；半径 2–6 格，
- * 高度 20–60 格，切向风 5–12 m/s，寿命 1–5 分钟，随机游荡。</p>
+ * 条件挺苛刻：沙漠/岩石/沙滩这类烫地表 + 大太阳 + 背景风弱。
+ * 长出来之后半径 2–6 格，高 20–60 格，中心切向风 5–12 m/s，
+ * 活个 1–5 分钟，满地乱晃。北半球统计上多为气旋式旋转，
+ * 这里就随机了，别深究。
  */
 public class DustDevilSystem implements WeatherPhenomenon {
     public static final int MAX_DEVILS = 12;
@@ -57,7 +59,7 @@ public class DustDevilSystem implements WeatherPhenomenon {
                     || surface == ZenithTerrainSurfaceClass.ROCK
                     || surface == ZenithTerrainSurfaceClass.BEACH;
             if (!hotGround && random.nextDouble() < 0.8) continue;
-            // 需要弱背景风
+            // 尘卷风怕大风，背景风太强就长不出来
             var l1s = ctx.l1().sample(ax, 80, az);
             if (Math.hypot(l1s.windX(), l1s.windZ()) > 6 && random.nextDouble() < 0.7) continue;
 
@@ -105,15 +107,13 @@ public class DustDevilSystem implements WeatherPhenomenon {
             double r = Math.sqrt(dx * dx + dz * dz);
             if (r > d.radiusBlocks * 3 || y > d.heightBlocks + 60) continue;
             double env = d.envelope();
-            // 高度衰减
             double hDecay = y < d.heightBlocks ? 1.0 : Math.max(0, 1 - (y - d.heightBlocks) / 60.0);
             if (r < d.radiusBlocks) {
-                // 核心：强上升
+                // 核心区：上升气流最强
                 double core = 1 - r / d.radiusBlocks;
                 acc = acc.add(new WindContribution(0, 4.5 * core * env * hDecay, 0,
                         0.4 * core * env, 0));
             } else {
-                // 涡旋切向风
                 double ring = Math.exp(-Math.pow((r - d.radiusBlocks) / (d.radiusBlocks * 1.5), 2));
                 double inv = r > 0.5 ? 1.0 / r : 0;
                 double vt = d.tangentialMps * ring * env * hDecay;

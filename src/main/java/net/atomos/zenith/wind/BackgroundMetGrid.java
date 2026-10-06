@@ -1,11 +1,11 @@
 package net.atomos.zenith.wind;
 
 /**
- * L0 背景天气网格（服务端权威）：41×41 格 @256 blocks/格，单层。
+ * L0 背景天气网格，服务端权威：41×41 格，每格 256 格方块，单层。
  *
- * <p>移植自 Aerodynamics4MC-Core 的 {@code BackgroundMetGrid}（MIT）。
- * 每次刷新：半拉格朗日平流 → 扩散 → 地转调整 → 地形阻力 → 松弛 → 粗糙度拖曳 →
- * 温度/湿度松弛。</p>
+ * 每次刷新的流水线：半拉格朗日平流 → 扩散 → 地转调整 → 地形阻力 →
+ * 松弛到目标 → 粗糙度拖曳 → 温度/湿度松弛。简单说就是先让风自己动起来，
+ * 再慢慢往驱动器给的目标风靠，山挡一下、地面蹭一下。
  */
 public class BackgroundMetGrid {
     public static final int RADIUS_CELLS = 20;
@@ -22,15 +22,13 @@ public class BackgroundMetGrid {
     public static final double WIND_DIFFUSE_BLEND = 0.16;
     public static final double PRESSURE_DIFFUSE_BLEND = 0.10;
 
-    /** 地形探针：高度/粗糙度/生物群系温度（由运行时注入，避免区块加载）。 */
+    /** 地形探针：高度/粗糙度/生物群系气温。运行时注入，走探针而不是读区块，免得触发区块加载。 */
     public interface TerrainProbe {
         double terrainHeightBlocks(double blockX, double blockZ);
         double roughness01(double blockX, double blockZ);
-        /** 生物群系基准气温（开尔文）。 */
         double biomeTemperatureKelvin(double blockX, double blockZ);
     }
 
-    /** 单格状态。 */
     public static final class CellState {
         public double windX, windZ;
         public double geoWindX, geoWindZ;
@@ -39,14 +37,13 @@ public class BackgroundMetGrid {
         public double surfaceTempK = 288.0;
         public double deepGroundTempK = 285.0;
         public double humidity01 = 0.5;
-        // 对流/龙卷强迫（透传）
+        // 对流/龙卷强迫：从驱动器原样透传下来
         public double convHeatK, convMoist, convInX, convInZ, convEnv;
         public double torWindX, torWindZ, torHeatK, torMoist, torUpdraft;
         public double terrainHeight;
         public double roughness01 = 0.3;
     }
 
-    /** 采样输出。 */
     public record Sample(double windX, double windZ,
                          double pressureAnomalyPa,
                          double airTempK, double surfaceTempK,
@@ -86,7 +83,6 @@ public class BackgroundMetGrid {
     public void refresh(WorldScaleDriver driver, TerrainProbe terrain,
                         double dtSeconds, double timeOfDay01, boolean raining,
                         double seasonTempBiasK) {
-        // 交换 prev/current
         for (int i = 0; i < SIZE; i++)
             for (int j = 0; j < SIZE; j++) {
                 copyInto(cells[i][j], prev[i][j]);
@@ -104,7 +100,7 @@ public class BackgroundMetGrid {
                 c.terrainHeight = terrain.terrainHeightBlocks(bx, bz);
                 c.roughness01 = terrain.roughness01(bx, bz);
 
-                // 1) 半拉格朗日平流：沿上一步风回溯
+                // 1) 半拉格朗日平流：顺着上一步的风往回找
                 double backX = i - p.windX * dtSeconds / CELL_SIZE_BLOCKS;
                 double backZ = j - p.windZ * dtSeconds / CELL_SIZE_BLOCKS;
                 CellState adv = bilinear(prev, backX, backZ);
@@ -112,7 +108,7 @@ public class BackgroundMetGrid {
                 double windX = adv.windX, windZ = adv.windZ;
                 double pressure = adv.pressureAnomalyPa;
 
-                // 2) 扩散：与四邻均值混合
+                // 2) 扩散：跟四个邻居掺一掺，抹平尖峰
                 CellState n = neighborMean(prev, i, j);
                 windX = lerp(windX, n.windX, WIND_DIFFUSE_BLEND);
                 windZ = lerp(windZ, n.windZ, WIND_DIFFUSE_BLEND);
@@ -121,17 +117,17 @@ public class BackgroundMetGrid {
                 // 驱动器目标叠加
                 pressure = lerp(pressure, drv.pressureAnomalyPa(), 0.35);
 
-                // 3) 地转调整
+                // 3) 地转调整：气压梯度 + 科里奥利掐出来的地转风
                 double[] geo = computeGeostrophicWind(i, j);
                 c.geoWindX = geo[0];
                 c.geoWindZ = geo[1];
                 double geoMag = Math.hypot(geo[0], geo[1]);
                 double blend = GEOSTROPHIC_DIRECT_WIND_BLEND
-                        + 0.14 * Math.min(1.0, geoMag / 8.0); // ∈ [0.18, 0.32]
+                        + 0.14 * Math.min(1.0, geoMag / 8.0); // 落在 [0.18, 0.32]
                 double targetX = lerp(drv.targetWindX(), geo[0], blend);
                 double targetZ = lerp(drv.targetWindZ(), geo[1], blend);
 
-                // 4) 地形阻力与偏转
+                // 4) 地形：迎风坡减速（形阻），再沿等高线拐个弯
                 double[] grad = terrainGradient(terrain, bx, bz);
                 double gx = grad[0], gz = grad[1];
                 double gradMag = Math.hypot(gx, gz);
@@ -141,24 +137,23 @@ public class BackgroundMetGrid {
                     targetX -= gx / gradMag * drag * Math.hypot(targetX, targetZ);
                     targetZ -= gz / gradMag * drag * Math.hypot(targetX, targetZ);
                     double deflect = clamp(gradMag * TERRAIN_FLOW_DEFLECTION_SCALE, 0, 0.55);
-                    // 沿等高线偏转
-                    double tx = -gz / gradMag, tz = gx / gradMag;
+                    double tx = -gz / gradMag, tz = gx / gradMag; // 等高线切向
                     double along = targetX * tx + targetZ * tz;
                     targetX = lerp(targetX, tx * along, deflect);
                     targetZ = lerp(targetZ, tz * along, deflect);
                 }
 
-                // 5) 松弛到目标
+                // 5) 松弛：慢慢往目标风靠，别硬掰
                 double k = Math.min(1.0, dtSeconds * FLOW_RELAXATION_PER_SECOND);
                 windX = lerp(windX, targetX, k);
                 windZ = lerp(windZ, targetZ, k);
 
-                // 6) 粗糙度拖曳
+                // 6) 地面粗糙度蹭掉一点风速
                 double roughDrag = clamp(dtSeconds * (0.0025 + c.roughness01 * 0.01), 0, 0.22);
                 windX *= (1 - roughDrag);
                 windZ *= (1 - roughDrag);
 
-                // 风速硬上限
+                // 风速硬上限，免得数值炸了
                 double spd = Math.hypot(windX, windZ);
                 if (spd > MAX_DYNAMIC_WIND_MPS) {
                     windX *= MAX_DYNAMIC_WIND_MPS / spd;
@@ -169,7 +164,7 @@ public class BackgroundMetGrid {
                 c.windZ = windZ;
                 c.pressureAnomalyPa = pressure;
 
-                // 7) 温度/湿度松弛
+                // 7) 温度/湿度松弛：往生物群系基准 + 高度递减率 + 日照加热靠
                 double biomeT = terrain.biomeTemperatureKelvin(bx, bz) + seasonTempBiasK;
                 double targetAirT = biomeT + drv.temperatureBiasKelvin()
                         - c.terrainHeight * ALTITUDE_LAPSE_RATE_K_PER_BLOCK;
@@ -188,7 +183,7 @@ public class BackgroundMetGrid {
                         + (c.surfaceTempK - c.airTempK) * 0.01 + (raining ? 0.05 : 0));
                 c.humidity01 = clamp01(lerp(adv.humidity01, targetH, hRelax));
 
-                // 强迫透传
+                // 驱动器的对流/龙卷强迫原样带下来
                 c.convHeatK = drv.convectiveHeatingKelvin();
                 c.convMoist = drv.convectiveMoistening();
                 c.convInX = drv.convectiveInflowX();
@@ -208,7 +203,7 @@ public class BackgroundMetGrid {
         double ps = pressureAt(i, j + 1), pn = pressureAt(i, j - 1);
         double dPdx = (pe - pw) / (2 * CELL_SIZE_BLOCKS);
         double dPdz = (ps - pn) / (2 * CELL_SIZE_BLOCKS);
-        // 北半球 Coriolis 符号为正
+        // 北半球，科里奥利符号取正
         double ug = -dPdz * GEOSTROPHIC_WIND_SCALE;
         double vg = dPdx * GEOSTROPHIC_WIND_SCALE;
         return new double[]{ug, vg};
@@ -282,7 +277,7 @@ public class BackgroundMetGrid {
         dst.terrainHeight = src.terrainHeight; dst.roughness01 = src.roughness01;
     }
 
-    /** 双线性插值采样（方块坐标）。 */
+    /** 双线性插值采样，输入方块坐标。 */
     public Sample sample(double blockX, double blockZ) {
         double fi = (blockX - focusBlockX) / CELL_SIZE_BLOCKS + RADIUS_CELLS;
         double fj = (blockZ - focusBlockZ) / CELL_SIZE_BLOCKS + RADIUS_CELLS;

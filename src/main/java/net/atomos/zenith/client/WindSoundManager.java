@@ -15,7 +15,6 @@ public final class WindSoundManager {
 
     private WindSoundManager() {}
 
-    /** 客户端 tick 调用。 */
     public static void clientTick() {
         Minecraft mc = Minecraft.getInstance();
         if (mc.level == null || mc.player == null) {
@@ -37,7 +36,6 @@ public final class WindSoundManager {
         }
     }
 
-    /** 风声循环实例：无衰减、全局播放。 */
     static class WindLoopSound extends AbstractTickableSoundInstance {
         WindLoopSound() {
             super(ZenithSounds.WIND_LOOP.get(), SoundSource.AMBIENT, RandomSource.create());

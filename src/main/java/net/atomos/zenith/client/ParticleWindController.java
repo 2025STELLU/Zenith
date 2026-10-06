@@ -14,14 +14,9 @@ import net.neoforged.api.distmarker.OnlyIn;
 import java.util.Random;
 
 /**
- * 粒子风控（客户端）：每 tick 按本地风况生成环境粒子。
- * <ul>
- *   <li>风迹：风速 &gt; 3 m/s 时在玩家周围生成</li>
- *   <li>落叶：森林生物群系 + 有风时</li>
- *   <li>扬尘：阵风/高湍流贴地</li>
- *   <li>水沫：风暴/台风快照活跃时在玩家附近生成（模拟雨带水沫）</li>
- *   <li>热浪：熔岩/火焰/营火上方</li>
- * </ul>
+ * 客户端环境粒子：每 tick 按本地风况撒粒子。
+ * 风速超 3 m/s 飘风迹，森林里有风掉落叶，贴地大风或高湍流扬尘，
+ * 风暴/台风天溅水沫，熔岩/火焰/点着的营火上冒热浪。
  */
 @OnlyIn(Dist.CLIENT)
 public final class ParticleWindController {
@@ -34,7 +29,7 @@ public final class ParticleWindController {
         Minecraft mc = Minecraft.getInstance();
         ClientLevel level = mc.level;
         if (level == null || mc.player == null || mc.isPaused()) return;
-        if (++tickCounter % 2 != 0) return; // 每 2 tick 一次
+        if (++tickCounter % 2 != 0) return;
 
         double px = mc.player.getX(), py = mc.player.getY(), pz = mc.player.getZ();
         var wind = ClientWindState.get().sampleCoarse(px, py + 1, pz);

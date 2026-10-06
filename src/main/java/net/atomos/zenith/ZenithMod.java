@@ -17,12 +17,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Zenith --- Minecraft的多尺度实时风与天气模拟。
+ * Zenith —— Minecraft 里的多尺度实时风与天气模拟。
  *
- * <p>架构（移植自Aerodynamics4MC-Core，MIT 许可，见LICENSE。在此感谢Firedoge大佬）：
- * 目前实现了行星尺度驱动（气旋/对流团/龙卷/台风）→ L0 背景天气网格 → L1 中尺度网格 →
- * L2 本地流场求解器（纯 Java 实现，原版为 native LBM JNI）。
- * 另新增了：热对流、 海风、 风暴单体、 台风。</p>
+ * 架构：行星尺度驱动（气旋/对流团/龙卷/台风）→ L0 背景天气网格 →
+ * L1 中尺度网格 → L2 本地流场求解器（纯 Java，原版是 native LBM 走 JNI）。
+ * 新增内容：热对流、海风、风暴单体、台风。
  */
 @Mod(ZenithMod.MOD_ID)
 public class ZenithMod {

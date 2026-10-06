@@ -9,34 +9,31 @@ import java.util.List;
 import java.util.Random;
 
 /**
- * 台风系统：暖心涡旋 + 眼墙 + 螺旋雨带。
+ * 台风：暖心涡旋 + 眼墙 + 螺旋雨带。
  *
- * <p>模型（Rankine 组合涡旋）：</p>
- * <ul>
- *   <li>切向风：r&lt;Rmax 时 Vmax·r/Rmax；r&gt;Rmax 时 Vmax·(Rmax/r)^0.5</li>
- *   <li>眼区（r&lt;眼半径）：静风，由 {@link #eyeDampening} 实现总风衰减</li>
- *   <li>眼墙（r≈Rmax）：强上升 8–15 m/s + 暴雨</li>
- *   <li>螺旋雨带：3 条对数螺旋臂，臂上降水 + 上升 + 湍流</li>
- *   <li>边界层径向内流：约为切向风的 15%</li>
- *   <li>移动：基流引导 ×0.8 + β 漂移（向极向西 ~1.5 m/s）；登陆后指数减弱</li>
- * </ul>
+ * 切向风按 Rankine 组合涡旋：眼墙内（r&lt;Rmax）Vmax·r/Rmax 往上爬，
+ * 眼墙外按 Vmax·(Rmax/r)^0.5 往下掉。眼区静风（走 {@link #eyeDampening}，
+ * 对总风做乘法衰减），眼墙（r≈Rmax）强上升 8–15 m/s + 暴雨，
+ * 外面 3 条对数螺旋雨带转着扫。边界层径向内流按切向风的 15% 算。
+ * 台风跟着引导气流走（×0.8），外加 β 漂移（往极地方向偏西 ~1.5 m/s）；
+ * 一旦登陆就指数减弱——没了暖洋面供能，撑不了多久。
  */
 public class TyphoonSystem implements WeatherPhenomenon {
     public static final int MAX_TYPHOONS = 2;
     public static final int RAINBAND_ARMS = 3;
 
     public static final class Typhoon {
-        public double x, z;               // 中心（blocks）
-        public double vmaxMps = 40;       // 最大切向风
+        public double x, z;
+        public double vmaxMps = 40;       // 最大切向风速
         public double rmaxBlocks = 55;    // 最大风速半径
         public double eyeRadiusBlocks = 18;
         public double influenceRadiusBlocks = 600;
-        public double spin = 1;           // 北半球气旋式（逆时针）
+        public double spin = 1;           // 北半球气旋式，逆时针
         public double ageSeconds;
-        public double intensity01 = 1.0;  // 登陆衰减用
+        public double intensity01 = 1.0;  // 登陆后衰减用
         public String name = "unnamed";
 
-        /** 切向风速廓线（m/s）。 */
+        /** Rankine 组合涡旋的切向风速廓线（m/s）。 */
         public double tangential(double r) {
             double v;
             if (r < rmaxBlocks) v = vmaxMps * r / rmaxBlocks;
@@ -94,21 +91,21 @@ public class TyphoonSystem implements WeatherPhenomenon {
             var l0s = ctx.l0().sample(t.x, t.z);
             double steerX = l0s.windX() * 0.8;
             double steerZ = l0s.windZ() * 0.8;
-            // β 漂移：向极（-z 为北）偏西
+            // β 漂移：往极地方向偏西（约定 -z 为北）
             double betaX = -1.0, betaZ = -1.1;
             t.x += (steerX + betaX) * dtSeconds;
             t.z += (steerZ + betaZ) * dtSeconds;
 
-            // 登陆减弱：中心在陆地上 → 指数衰减（时间常数 6 小时）
+            // 登陆减弱：没了洋面供能，指数衰减（时间常数 6 小时）
             boolean overLand = !ctx.terrain().isOceanAt(t.x, t.z);
             if (overLand) {
                 t.intensity01 *= Math.exp(-dtSeconds / 21600.0);
             } else if (t.intensity01 < 1.0) {
-                // 回到洋面缓慢恢复（上限 0.85）
+                // 回到洋面慢慢回血，上限 0.85
                 t.intensity01 = Math.min(0.85, t.intensity01 + dtSeconds / 43200.0);
             }
 
-            // 自然衰减：30 天后消散（防止永久存在）
+            // 30 天后强制消散，别让它赖着不走
             if (t.ageSeconds > 2_592_000 || t.intensity01 < 0.12) it.remove();
         }
     }
@@ -128,16 +125,15 @@ public class TyphoonSystem implements WeatherPhenomenon {
             if (r < t.eyeRadiusBlocks) continue; // 眼区由 eyeDampening 处理
 
             double inv = r > 1e-3 ? 1.0 / r : 0;
-            // 切向（气旋式）+ 径向内流
+            // 切向（气旋式）+ 径向内流（负号表示指向中心）
             double vt = t.tangential(r);
-            double vr = -vt * 0.15; // 内流为负（指向中心）
-            // 切向单位向量（逆时针）：(-dz/r, dx/r)
+            double vr = -vt * 0.15;
             double tx = -dz * inv * t.spin, tz = dx * inv * t.spin;
             double rx = dx * inv, rz = dz * inv;
             double vx = tx * vt + rx * vr;
             double vz = tz * vt + rz * vr;
 
-            // 高度衰减：台风为深厚系统，300 格以上才明显衰减
+            // 台风是深厚系统，300 格以上才明显衰减
             double hDecay = Math.exp(-Math.max(0, y - 200) / 400.0);
 
             double vy = 0, turb = 0.12, precip = 0.25;
@@ -173,19 +169,18 @@ public class TyphoonSystem implements WeatherPhenomenon {
         double best = 0;
         for (int arm = 0; arm < RAINBAND_ARMS; arm++) {
             double phase = spiral - arm * 2 * Math.PI / RAINBAND_ARMS;
-            // 折叠到 [-π, π]
             phase = Math.atan2(Math.sin(phase), Math.cos(phase));
             double g = Math.exp(-phase * phase / 0.18);
             best = Math.max(best, g);
         }
-        // 雨带只在一定半径环带内
+        // 雨带只在眼墙外一圈环带里有效
         double ring = Math.exp(-Math.pow((r - t.rmaxBlocks * 3.2) / (t.rmaxBlocks * 2.6), 2));
         return best * ring;
     }
 
     /**
      * 眼区静风衰减系数 [0,1]：1 表示完全静风。
-     * 运行时用它对总风做乘法衰减。
+     * 调用方拿这个对总风做乘法——眼区里风得掐掉。
      */
     public double eyeDampening(double x, double z) {
         double damp = 0;
