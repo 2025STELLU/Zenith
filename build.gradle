@@ -1,0 +1,58 @@
+// Zenith 构建脚本 —— NeoForge 1.21.1（ModDevGradle 插件）
+// 模板对照：https://github.com/neoforgemdks/mdk-1.21.1-moddevgradle
+
+plugins {
+    id 'java-library'
+    id 'eclipse'
+    id 'idea'
+    id 'maven-publish'
+    id 'net.neoforged.moddev' version '2.0.148'
+}
+
+version = mod_version
+group = mod_group
+
+repositories {
+}
+
+base {
+    archivesName = "${mod_id}-${minecraft_version}"
+}
+
+// Minecraft 1.21.1 需要 JDK 21
+java.toolchain.languageVersion = JavaLanguageVersion.of(21)
+
+neoForge {
+    version = neoforge_version
+
+    parchment {
+        minecraftVersion = parchment_minecraft_version
+        mappingsVersion = parchment_version
+    }
+
+    runs {
+        client {
+            client()
+            systemProperty 'forge.logging.console.level', 'debug'
+        }
+        server {
+            server()
+            systemProperty 'forge.logging.console.level', 'debug'
+        }
+        data {
+            data()
+        }
+    }
+
+    mods {
+        "${mod_id}" {
+            sourceSet(sourceSets.main)
+        }
+    }
+}
+
+sourceSets.main.resources { srcDir 'src/generated/resources' }
+
+dependencies {
+    // 纯 NeoForge，无外部模组依赖
+}

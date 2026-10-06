@@ -1,0 +1,15 @@
+{
+  "itemGroup.zenith": "Zenith | 风与天气",
+  "block.zenith.fan": "风扇",
+  "block.zenith.duct": "风道",
+  "block.zenith.wind_vane": "风向标",
+  "block.zenith.wind_turbine_probe": "风力涡轮探针",
+  "item.zenith.wind_meter": "风速计",
+  "item.zenith.meteorological_map": "气象图",
+  "item.zenith.sailboat": "帆船",
+  "entity.zenith.sailboat": "帆船",
+  "message.zenith.fan_speed": "风扇档位：%s",
+  "message.zenith.wind_meter": "风速 %s m/s（%s %s°）湍流 %s",
+  "message.zenith.wind_meter_unavailable": "风场数据不可用",
+  "screen.zenith.meteorological_map": "气象图"
+}

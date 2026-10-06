@@ -1,0 +1,12 @@
+{
+  "parent": "minecraft:block/cube",
+  "textures": {
+    "particle": "zenith:block/fan_side",
+    "down": "zenith:block/fan_side",
+    "up": "zenith:block/fan_side",
+    "north": "zenith:block/fan_front",
+    "south": "zenith:block/fan_side",
+    "west": "zenith:block/fan_side",
+    "east": "zenith:block/fan_side"
+  }
+}

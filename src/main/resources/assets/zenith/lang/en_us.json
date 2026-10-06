@@ -1,0 +1,15 @@
+{
+  "itemGroup.zenith": "Zenith | Wind & Weather",
+  "block.zenith.fan": "Fan",
+  "block.zenith.duct": "Duct",
+  "block.zenith.wind_vane": "Wind Vane",
+  "block.zenith.wind_turbine_probe": "Wind Turbine Probe",
+  "item.zenith.wind_meter": "Wind Meter",
+  "item.zenith.meteorological_map": "Meteorological Map",
+  "item.zenith.sailboat": "Sailboat",
+  "entity.zenith.sailboat": "Sailboat",
+  "message.zenith.fan_speed": "Fan speed: %s",
+  "message.zenith.wind_meter": "Wind %s m/s (%s %s°) turbulence %s",
+  "message.zenith.wind_meter_unavailable": "Wind data unavailable",
+  "screen.zenith.meteorological_map": "Meteorological Map"
+}

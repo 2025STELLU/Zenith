@@ -1,0 +1,10 @@
+{
+  "variants": {
+    "facing=down":  { "model": "zenith:block/duct", "x": 90 },
+    "facing=up":    { "model": "zenith:block/duct", "x": 270 },
+    "facing=north": { "model": "zenith:block/duct" },
+    "facing=south": { "model": "zenith:block/duct", "y": 180 },
+    "facing=west":  { "model": "zenith:block/duct", "y": 270 },
+    "facing=east":  { "model": "zenith:block/duct", "y": 90 }
+  }
+}
