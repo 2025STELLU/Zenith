@@ -312,7 +312,7 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
         }
 
         // L2 本地修正（服务端也计算，用于 gameplay 遮蔽/绕流）
-        LocalFlowSolver.LocalFlow l2 = s.l2.solve(x, y, z, vx, vy, vz, x, y, z);
+        LocalFlowSolver.LocalFlow l2 = s.l2.solve(x, y, z, vx, vy, vz);
 
         double turb = l1.turbulenceIntensity() >= 0
                 ? Math.min(1.0, l1.turbulenceIntensity() + turbAdd)
