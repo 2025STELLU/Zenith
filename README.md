@@ -61,3 +61,9 @@ if (wind.isTrustedForGameplay()) {
 ```
 
 需要 JDK 21（Gradle toolchain 自动下载）。编译后的产物在 `build/libs/`中。
+
+## 许可证
+
+All Rights Reserved.
+
+本模组使用Muse Spark 1.3补充了源码注释并完善了某些我自己的语法错误（懒得去写注释了）。
