@@ -67,3 +67,5 @@ if (wind.isTrustedForGameplay()) {
 All Rights Reserved.
 
 本模组使用Muse Spark 1.3补充了源码注释并完善了某些我自己的语法错误（懒得去写注释了）。
+
+By Stellux
