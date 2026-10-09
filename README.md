@@ -3,7 +3,7 @@
 Minecraft 多尺度实时风与天气模拟（NeoForge 1.21.1）。
 
 风场/天气系统架构移植并改写自 [Aerodynamics4MC-Core](https://github.com/MozillaFiredoge/Aerodynamics4MC-Core)
-（MIT 许可，详见 `LICENSE` 与 `THIRD_PARTY_LICENSES/`），包名改为 `net.atomos.zenith`，在此感谢Firedoge的技术支持。
+（MIT 许可，详见 `LICENSE` 与 `THIRD_PARTY_LICENSES/`），包名我改为了 `net.atomos.zenith`，在此感谢Firedoge的灵感和技术支持。
 我把原生的JNI LBM求解器替换为了纯Java版的实现，并新增了热对流、海风、风暴、台风系统。
 
 ## 架构
@@ -23,7 +23,7 @@ L2 LocalFlowSolver（纯Java：障碍物绕流+浮力，客户端本地高分辨
 
 - 服务端权威：L0/L1/驱动器；游戏玩法一律走 `ZenithWindApi.sampleGameplay()` 并检查
   `isTrustedForGameplay()`。
-- 客户端：服务端每2秒广播粗风场，客户端本地求解器提供可视化细节。
+- 客户端：服务端会每2秒广播粗风场，客户端内置的本地求解器会提供可视化细节。
 
 ## 新增天气系统
 
@@ -52,7 +52,7 @@ if (wind.isTrustedForGameplay()) {
 }
 ```
 
-客户端可视化用 `ZenithClientWindApi.sample(world, pos, SamplePolicy.CLIENT_LOCAL_PREFERRED)`。
+客户端可视化使用 `ZenithClientWindApi.sample(world, pos, SamplePolicy.CLIENT_LOCAL_PREFERRED)`。
 
 ## 构建
 
@@ -60,7 +60,7 @@ if (wind.isTrustedForGameplay()) {
 ./gradlew build
 ```
 
-需要 JDK 21（Gradle toolchain 自动下载）。编译后的产物在 `build/libs/`中。
+需要JDK 21（Gradle toolchain 自动下载）。编译后的产物在 `build/libs/`中。
 
 ## 许可证
 
