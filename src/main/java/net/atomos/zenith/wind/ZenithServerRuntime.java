@@ -479,7 +479,8 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
                 s.thermals.activeCount(), s.seaBreeze.frontInlandDistance(),
                 l1sample.humidity01(),
                 typhoons, storms,
-                s.fronts.fronts(), s.dustDevils.devils(), s.squallLines.lines());
+                s.fronts.fronts(), s.dustDevils.devils(), s.squallLines.lines(),
+                s.driver.tornadoes());
         for (ServerPlayer player : level.players()) {
             PacketDistributor.sendToPlayer(player, pkt);
         }

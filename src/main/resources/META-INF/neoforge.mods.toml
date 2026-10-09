@@ -1,7 +1,10 @@
 modLoader="javafml"
 loaderVersion="${neoforge_loader_version_range}"
 license="MIT"
-issueTrackerURL="https://github.com/atomos/zenith/issues"
+issueTrackerURL="https://github.com/2025STELLU/Zenith/issues"
+
+[[mixins]]
+config="zenith.mixins.json"
 
 [[mods]]
 modId="${mod_id}"

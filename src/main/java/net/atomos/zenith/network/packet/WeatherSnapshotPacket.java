@@ -7,6 +7,7 @@ import net.atomos.zenith.weather.FrontSystem;
 import net.atomos.zenith.weather.SquallLineSystem;
 import net.atomos.zenith.weather.StormCellSystem;
 import net.atomos.zenith.weather.TyphoonSystem;
+import net.atomos.zenith.wind.WorldScaleDriver;
 import net.minecraft.network.codec.ByteBufCodecs;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
@@ -31,7 +32,8 @@ public record WeatherSnapshotPacket(
         List<StormInfo> storms,
         List<FrontInfo> fronts,
         List<DevilInfo> dustDevils,
-        List<SquallInfo> squallLines) implements CustomPacketPayload {
+        List<SquallInfo> squallLines,
+        List<TornadoInfo> tornadoes) implements CustomPacketPayload {
 
     public record TyphoonInfo(String name, double x, double z,
                               float vmaxMps, float rmaxBlocks, float eyeRadiusBlocks,
@@ -45,6 +47,10 @@ public record WeatherSnapshotPacket(
     public record DevilInfo(double x, double z, float radiusBlocks) {}
 
     public record SquallInfo(double x1, double z1, double x2, double z2) {}
+
+    /** 龙卷快照：位置 / 最大风速 / 核心半径 / 强度 0~1 / 自旋方向 +1/-1。 */
+    public record TornadoInfo(double x, double z, float maxWindMps, float coreRadiusBlocks,
+                              float intensity01, float spin) {}
 
     public static final CustomPacketPayload.Type<WeatherSnapshotPacket> TYPE =
             new CustomPacketPayload.Type<>(ResourceLocation.fromNamespaceAndPath(ZenithMod.MOD_ID, "weather_snapshot"));
@@ -97,6 +103,15 @@ public record WeatherSnapshotPacket(
             ByteBufCodecs.DOUBLE, SquallInfo::z2,
             SquallInfo::new);
 
+    private static final StreamCodec<ByteBuf, TornadoInfo> TORNADO_CODEC = StreamCodec.composite(
+            ByteBufCodecs.DOUBLE, TornadoInfo::x,
+            ByteBufCodecs.DOUBLE, TornadoInfo::z,
+            ByteBufCodecs.FLOAT, TornadoInfo::maxWindMps,
+            ByteBufCodecs.FLOAT, TornadoInfo::coreRadiusBlocks,
+            ByteBufCodecs.FLOAT, TornadoInfo::intensity01,
+            ByteBufCodecs.FLOAT, TornadoInfo::spin,
+            TornadoInfo::new);
+
     private static <T> StreamCodec<ByteBuf, java.util.List<T>> listOf(StreamCodec<ByteBuf, T> element) {
         return new StreamCodec<>() {
             @Override
@@ -127,6 +142,7 @@ public record WeatherSnapshotPacket(
                 listOf(FRONT_CODEC).encode(buf, p.fronts());
                 listOf(DEVIL_CODEC).encode(buf, p.dustDevils());
                 listOf(SQUALL_CODEC).encode(buf, p.squallLines());
+                listOf(TORNADO_CODEC).encode(buf, p.tornadoes());
             },
             buf -> new WeatherSnapshotPacket(
                     ByteBufCodecs.FLOAT.decode(buf),
@@ -138,7 +154,8 @@ public record WeatherSnapshotPacket(
                     listOf(STORM_CODEC).decode(buf),
                     listOf(FRONT_CODEC).decode(buf),
                     listOf(DEVIL_CODEC).decode(buf),
-                    listOf(SQUALL_CODEC).decode(buf)));
+                    listOf(SQUALL_CODEC).decode(buf),
+                    listOf(TORNADO_CODEC).decode(buf)));
 
     @Override
     public Type<? extends CustomPacketPayload> type() {
@@ -152,7 +169,8 @@ public record WeatherSnapshotPacket(
                                               List<StormCellSystem.StormCell> storms,
                                               List<FrontSystem.Front> fronts,
                                               List<DustDevilSystem.DustDevil> devils,
-                                              List<SquallLineSystem.SquallLine> squallLines) {
+                                              List<SquallLineSystem.SquallLine> squallLines,
+                                              List<WorldScaleDriver.TornadoVortex> tornadoVortices) {
         List<TyphoonInfo> ti = new ArrayList<>();
         for (TyphoonSystem.Typhoon t : typhoons) {
             ti.add(new TyphoonInfo(t.name, t.x, t.z, (float) t.vmaxMps,
@@ -175,8 +193,13 @@ public record WeatherSnapshotPacket(
         for (SquallLineSystem.SquallLine l : squallLines) {
             qi.add(new SquallInfo(l.x1, l.z1, l.x2, l.z2));
         }
+        List<TornadoInfo> ni = new ArrayList<>();
+        for (WorldScaleDriver.TornadoVortex t : tornadoVortices) {
+            ni.add(new TornadoInfo(t.x, t.z, (float) t.maxWind, (float) t.coreRadius,
+                    (float) t.intensityEnvelope(), (float) t.spin));
+        }
         return new WeatherSnapshotPacket((float) stormActivity, tornadoCount, thermalCount,
-                (float) seaBreezeFront, (float) humidity01, ti, si, fi, di, qi);
+                (float) seaBreezeFront, (float) humidity01, ti, si, fi, di, qi, ni);
     }
 
     public static void handle(WeatherSnapshotPacket pkt, IPayloadContext ctx) {

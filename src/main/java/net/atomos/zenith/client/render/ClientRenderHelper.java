@@ -28,6 +28,20 @@ public final class ClientRenderHelper {
                     .setOverlayState(RenderStateShard.NO_OVERLAY)
                     .createCompositeState(false));
 
+    /** 纯色半透明 RenderType（双面，深度测试开）——龙卷漏斗 mesh 用。 */
+    public static final RenderType FLAT_TRANSLUCENT = RenderType.create(
+            "zenith_flat_translucent",
+            DefaultVertexFormat.POSITION_COLOR, VertexFormat.Mode.TRIANGLES, 8192,
+            false, false,
+            RenderType.CompositeState.builder()
+                    .setShaderState(RenderStateShard.POSITION_COLOR_SHADER)
+                    .setTransparencyState(RenderStateShard.TRANSLUCENT_TRANSPARENCY)
+                    .setCullState(RenderStateShard.NO_CULL)
+                    .setLightmapState(RenderStateShard.NO_LIGHTMAP)
+                    .setOverlayState(RenderStateShard.NO_OVERLAY)
+                    .setDepthTestState(RenderStateShard.LEQUAL_DEPTH_TEST)
+                    .createCompositeState(false));
+
     public static void renderBox(PoseStack pose, VertexConsumer vc,
                                  float x0, float y0, float z0, float x1, float y1, float z1,
                                  float r, float g, float b, float a) {

@@ -99,6 +99,11 @@ public final class ClientWindState implements ZenithClientWindRuntimeProvider {
         return s == null ? List.of() : s.storms();
     }
 
+    public List<WeatherSnapshotPacket.TornadoInfo> tornadoes() {
+        WeatherSnapshotPacket s = snapshot;
+        return s == null ? List.of() : s.tornadoes();
+    }
+
     private static double clamp01(double v) { return v < 0 ? 0 : Math.min(v, 1); }
     private static int clamp(int v, int lo, int hi) { return v < lo ? lo : Math.min(v, hi); }
 }
