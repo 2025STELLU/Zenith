@@ -86,12 +86,17 @@ public class SquallLineSystem implements WeatherPhenomenon {
             if (stormAct < 0.6 && random.nextDouble() < 0.5) continue;
 
             SquallLine l = new SquallLine();
-            double lineAng = Math.atan2(l1s.windX(), l1s.windZ()) + Math.PI / 2;
+            // 飑线走向 ⟂ 引导风（旧公式和 FrontSystem 同一个 atan2 轴混淆 bug）。
+            // frontNormal() 会自己翻到移动/阵风锋那一侧，所以线取哪一侧无所谓。
+            double wx = l1s.windX(), wz = l1s.windZ();
+            double w = Math.hypot(wx, wz);
+            if (w < 0.3) { wx = 1; wz = 0; w = 1; }
+            double lineDirX = -wz / w, lineDirZ = wx / w;  // 线方向 ⟂ 风
             double halfLen = 100 + random.nextDouble() * 200;
-            l.x1 = cx - Math.cos(lineAng) * halfLen;
-            l.z1 = cz - Math.sin(lineAng) * halfLen;
-            l.x2 = cx + Math.cos(lineAng) * halfLen;
-            l.z2 = cz + Math.sin(lineAng) * halfLen;
+            l.x1 = cx - lineDirX * halfLen;
+            l.z1 = cz - lineDirZ * halfLen;
+            l.x2 = cx + lineDirX * halfLen;
+            l.z2 = cz + lineDirZ * halfLen;
             l.moveX = l1s.windX() * 0.7;
             l.moveZ = l1s.windZ() * 0.7;
             l.intensity01 = 0.6 + stormAct * 0.4;

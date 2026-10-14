@@ -1,10 +1,13 @@
 package net.atomos.zenith.client;
 
-import com.mojang.blaze3d.shaders.FogShape;
 import net.atomos.zenith.particle.ZenithParticles;
 import net.atomos.zenith.weather.FogModel;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.util.Mth;
+import net.minecraft.world.effect.MobEffects;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.level.material.FogType;
 import net.neoforged.neoforge.client.event.ViewportEvent;
 
 import java.util.Random;
@@ -20,13 +23,18 @@ public final class FogController {
     public static double currentDensity = 0;
 
     public static void onComputeFog(ViewportEvent.RenderFog event) {
+        // 水下/岩浆/粉雪的雾是原版的，不碰
+        if (event.getType() != FogType.NONE) return;
+        var cam = event.getCamera().getEntity();
+        // 失明/黑暗效果自带雾，覆盖了就是帮倒忙
+        if (cam instanceof LivingEntity le
+                && (le.hasEffect(MobEffects.BLINDNESS) || le.hasEffect(MobEffects.DARKNESS))) return;
+
         Minecraft mc = Minecraft.getInstance();
         ClientLevel level = mc.level;
-        if (level == null || mc.getCameraEntity() == null) return;
+        if (level == null) return;
 
-        var cam = mc.getCameraEntity();
-        double x = cam.getX(), y = cam.getY(), z = cam.getZ();
-        var wind = ClientWindState.get().sampleCoarse(x, y, z);
+        var wind = ClientWindState.get().sampleCoarse(cam.getX(), cam.getY(), cam.getZ());
         double windSpeed = Math.hypot(wind.x(), wind.z());
 
         // 湿度从天气快照取，包没到之前先按 0.6 估
@@ -36,21 +44,16 @@ public final class FogController {
 
         boolean raining = level.isRaining();
         double solar = FogModel.solarFactor(level.getDayTime() / 24000.0);
-        boolean overWater = isOverWater(level, (int) x, (int) y, (int) z);
+        boolean overWater = isOverWater(level, (int) cam.getX(), (int) cam.getY(), (int) cam.getZ());
 
         currentDensity = FogModel.density(solar, raining, windSpeed, humidity, overWater);
+        if (currentDensity < 0.02) return;
 
-        if (currentDensity > 0.02) {
-            float far = event.getFarPlaneDistance();
-            float near = event.getNearPlaneDistance();
-            // 浓雾时能见度可降至约 20 格
-            float farScale = (float) (1 - 0.93 * currentDensity);
-            event.setFarPlaneDistance(Math.max(16, far * farScale));
-            event.setNearPlaneDistance(Math.max(2, near * farScale));
-            if (currentDensity > 0.5) {
-                event.setFogShape(FogShape.SPHERE);
-            }
-        }
+        // 浓雾时能见度压到约 24 格；1.21.1 不 cancel 的话改了也白改
+        float far = Mth.lerp((float) currentDensity, event.getFarPlaneDistance(), 24f);
+        event.setFarPlaneDistance(far);
+        event.setNearPlaneDistance(Math.min(event.getNearPlaneDistance(), far * 0.1f));
+        event.setCanceled(true);
     }
 
     private static boolean isOverWater(ClientLevel level, int x, int y, int z) {

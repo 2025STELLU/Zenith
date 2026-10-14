@@ -8,13 +8,20 @@ import net.atomos.zenith.api.client.ZenithClientWindRuntimeProvider;
 import net.atomos.zenith.network.packet.CoarseWindPacket;
 import net.atomos.zenith.network.packet.WeatherSnapshotPacket;
 import net.minecraft.client.Minecraft;
+import net.neoforged.api.distmarker.Dist;
+import net.neoforged.bus.api.SubscribeEvent;
+import net.neoforged.fml.common.EventBusSubscriber;
+import net.neoforged.neoforge.client.event.ClientPlayerNetworkEvent;
 
 import java.util.List;
 
 /**
  * 客户端风场状态：承接服务端粗风场包 + 天气快照包，
  * 为客户端采样 API 与可视化提供数据。
+ *
+ * 登出 / 换维度时清空：旧服务器的台风、龙卷不能画到新世界里。
  */
+@EventBusSubscriber(value = Dist.CLIENT)
 public final class ClientWindState implements ZenithClientWindRuntimeProvider {
     private static final ClientWindState INSTANCE = new ClientWindState();
 
@@ -33,6 +40,23 @@ public final class ClientWindState implements ZenithClientWindRuntimeProvider {
 
     public static void onWeatherSnapshot(WeatherSnapshotPacket pkt) {
         INSTANCE.snapshot = pkt;
+    }
+
+    /** 旧服数据清零：断线、换服、单人退存档都走这里，快照下个广播周期会重收。 */
+    public static void clear() {
+        INSTANCE.coarseWind = null;
+        INSTANCE.snapshot = null;
+    }
+
+    @SubscribeEvent
+    public static void onLogout(ClientPlayerNetworkEvent.LoggingOut event) {
+        clear();
+    }
+
+    @SubscribeEvent
+    public static void onPlayerClone(ClientPlayerNetworkEvent.Clone event) {
+        // 换维度时客户端玩家会被重建（走的是 respawn 包），旧维度的快照不能留
+        clear();
     }
 
     public CoarseWindPacket coarseWind() {

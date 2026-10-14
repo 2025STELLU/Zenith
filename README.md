@@ -2,8 +2,9 @@
 
 Minecraft 多尺度实时风与天气模拟（NeoForge 1.21.1）。
 
-风场/天气系统架构移植并改写自 [Aerodynamics4MC-Core](https://github.com/MozillaFiredoge/Aerodynamics4MC-Core)
-（MIT 许可，详见 `LICENSE` 与 `THIRD_PARTY_LICENSES/`），包名我改为了 `net.atomos.zenith`，在此感谢Firedoge的灵感和技术支持。
+风场/天气系统的设计思路受 [Aerodynamics4MC-Core](https://github.com/MozillaFiredoge/Aerodynamics4MC-Core)
+启发，但全部代码为独立编写的 cleanroom 实现，未复制其源码（致谢见 `ACKNOWLEDGMENT_Aerodynamics4MC.md`）。
+包名为 `net.atomos.zenith`，在此感谢 Firedoge 的灵感和技术分享。
 我把原生的JNI LBM求解器替换为了纯Java版的实现，并新增了热对流、海风、风暴、台风系统。
 
 ## 架构
@@ -64,7 +65,7 @@ if (wind.isTrustedForGameplay()) {
 
 ## 许可证
 
-All Rights Reserved.
+All Rights Reserved. 未经作者事先书面许可，不得使用、复制、修改或分发（详见 `LICENSE`）。
 
 本模组使用Muse Spark 1.3补充了源码注释并完善了某些我自己的语法错误（懒得去写注释了）。
 

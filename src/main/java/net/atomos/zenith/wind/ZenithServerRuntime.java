@@ -36,13 +36,17 @@ import net.atomos.zenith.weather.WeatherContext;
 import net.atomos.zenith.weather.WeatherPhenomenon;
 import net.atomos.zenith.weather.WindContribution;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Holder;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.tags.BiomeTags;
+import net.minecraft.tags.BlockTags;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.biome.Biome;
+import net.minecraft.world.level.biome.Biomes;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.CampfireBlock;
 import net.minecraft.world.level.block.state.BlockState;
@@ -52,6 +56,7 @@ import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.level.material.Fluids;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.neoforge.common.NeoForge;
+import net.neoforged.neoforge.event.server.ServerStoppedEvent;
 import net.neoforged.neoforge.event.tick.ServerTickEvent;
 import net.neoforged.neoforge.network.PacketDistributor;
 import org.slf4j.Logger;
@@ -162,12 +167,25 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
                         return st.isSolid();
                     },
                     (x, y, z, r) -> heatNear(s, x, y, z, r),
-                    (x, y, z, r) -> JetSourceRegistry.jetsNear(x, y, z, r));
+                    (x, y, z, r) -> JetSourceRegistry.jetsNear(level.dimension(), x, y, z, r));
             return s;
         });
     }
 
     // tick 编排
+
+    /**
+     * 存档关闭：维度状态里 pin 着旧 ServerLevel（地形适配器、L2 lambda 都引着它），
+     * 射流表是 JVM 级静态的。两处都必须清，否则下个存档同名维度会复用旧状态，
+     * 旧世界还会被 pin 住无法 GC；单人下集成服务器停了，客户端那份也一起清。
+     */
+    @SubscribeEvent
+    public void onServerStopped(ServerStoppedEvent event) {
+        int n = dimensions.size();
+        dimensions.clear();
+        JetSourceRegistry.clear();
+        LOGGER.info("Zenith server stopped: cleared {} dimension states and the jet registry.", n);
+    }
 
     @SubscribeEvent
     public void onServerTick(ServerTickEvent.Post event) {
@@ -646,14 +664,20 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
             ChunkAccess c = chunkIfLoaded(bx, bz);
             if (c == null) return fallback.roughnessAt(bx, bz);
             int x = (int) Math.floor(bx), z = (int) Math.floor(bz);
-            Biome biome = c.getNoiseBiome(x >> 2, 64 >> 2, z >> 2).value();
+            // 别用 biome.toString() 猜名字：Biome 没覆写 toString，拿到的是类名@hash，永远匹配不上
+            Holder<Biome> biome = c.getNoiseBiome(x >> 2, 64 >> 2, z >> 2);
             float r = 0.3f;
-            String name = biome.toString();
-            if (name.contains("forest") || name.contains("jungle")) r = 0.75f;
-            else if (name.contains("desert") || name.contains("beach")) r = 0.15f;
-            else if (name.contains("ocean") || name.contains("river")) r = 0.03f;
-            else if (name.contains("mountain") || name.contains("peak")) r = 0.85f;
+            if (biome.is(BiomeTags.IS_FOREST) || biome.is(BiomeTags.IS_JUNGLE)
+                    || biome.is(BiomeTags.IS_TAIGA)) r = 0.75f;
+            else if (isDesert(biome) || biome.is(BiomeTags.IS_BEACH)) r = 0.15f;
+            else if (biome.is(BiomeTags.IS_OCEAN) || biome.is(BiomeTags.IS_RIVER)) r = 0.03f;
+            else if (biome.is(BiomeTags.IS_MOUNTAIN)) r = 0.85f;
             return r;
+        }
+
+        // 原版没有 IS_DESERT 标签，沙漠只能按注册名认
+        private static boolean isDesert(Holder<Biome> biome) {
+            return biome.unwrapKey().map(k -> k.equals(Biomes.DESERT)).orElse(false);
         }
 
         @Override
@@ -705,12 +729,15 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
             int h = c.getHeight(Heightmap.Types.WORLD_SURFACE, x & 15, z & 15);
             BlockState st = c.getBlockState(new BlockPos(x, h, z));
             if (st.getFluidState().is(Fluids.WATER)) return ZenithTerrainSurfaceClass.OCEAN;
-            String name = st.getBlock().toString().toLowerCase();
-            if (name.contains("sand")) return ZenithTerrainSurfaceClass.DESERT_SAND;
-            if (name.contains("snow") || name.contains("ice")) return ZenithTerrainSurfaceClass.SNOW;
-            if (name.contains("stone") || name.contains("rock") || name.contains("deepslate"))
-                return ZenithTerrainSurfaceClass.ROCK;
-            if (name.contains("leaves") || name.contains("log"))
+            // 别用方块名 contains：以前 "sand" 会误伤 sandstone，"stone" 会误伤 redstone_ore
+            if (st.is(BlockTags.SAND)) return ZenithTerrainSurfaceClass.DESERT_SAND;
+            if (st.is(BlockTags.SNOW) || st.is(Blocks.ICE) || st.is(Blocks.PACKED_ICE)
+                    || st.is(Blocks.BLUE_ICE) || st.is(Blocks.FROSTED_ICE))
+                return ZenithTerrainSurfaceClass.SNOW;
+            if (st.is(BlockTags.BASE_STONE_OVERWORLD) || st.is(Blocks.SANDSTONE)
+                    || st.is(Blocks.RED_SANDSTONE) || st.is(Blocks.END_STONE)
+                    || st.is(Blocks.NETHERRACK)) return ZenithTerrainSurfaceClass.ROCK;
+            if (st.is(BlockTags.LEAVES) || st.is(BlockTags.LOGS))
                 return ZenithTerrainSurfaceClass.FOREST;
             return ZenithTerrainSurfaceClass.GRASS;
         }

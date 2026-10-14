@@ -21,7 +21,8 @@ import net.minecraft.world.phys.BlockHitResult;
 import org.jetbrains.annotations.Nullable;
 
 /**
- * 风扇：定向风源。右键切换档位（0–3 档 → 0/4/8/12 m/s），红石信号可强制满档。
+ * 风扇：定向风源。右键切换用户档位（0–3 档 → 0/4/8/12 m/s），
+ * 红石通电时强制满档输出，断电后自动回到用户档位。
  */
 public class FanBlock extends Block implements EntityBlock {
     public static final DirectionProperty FACING = BlockStateProperties.FACING;
@@ -58,13 +59,10 @@ public class FanBlock extends Block implements EntityBlock {
     @Override
     public void neighborChanged(BlockState state, Level level, BlockPos pos, Block block,
                                 BlockPos fromPos, boolean isMoving) {
+        // 红石只覆盖"有效输出"：SPEED 永远是用户档位，通电满档、断电自动恢复
         boolean powered = level.hasNeighborSignal(pos);
-        int want = powered ? 3 : state.getValue(SPEED);
         BlockEntity be = level.getBlockEntity(pos);
         if (be instanceof FanBlockEntity fan) fan.setRedstoneOverride(powered);
-        if (want != state.getValue(SPEED)) {
-            level.setBlock(pos, state.setValue(SPEED, want), 3);
-        }
     }
 
     @Nullable

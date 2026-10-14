@@ -195,7 +195,9 @@ public record WeatherSnapshotPacket(
         }
         List<TornadoInfo> ni = new ArrayList<>();
         for (WorldScaleDriver.TornadoVortex t : tornadoVortices) {
-            ni.add(new TornadoInfo(t.x, t.z, (float) t.maxWind, (float) t.coreRadius,
+            // t.x/z 是驱动格单位，客户端按方块坐标画 → 转成方块
+            ni.add(new TornadoInfo(t.x * WorldScaleDriver.CELL_SIZE_BLOCKS,
+                    t.z * WorldScaleDriver.CELL_SIZE_BLOCKS, (float) t.maxWind, (float) t.coreRadius,
                     (float) t.intensityEnvelope(), (float) t.spin));
         }
         return new WeatherSnapshotPacket((float) stormActivity, tornadoCount, thermalCount,

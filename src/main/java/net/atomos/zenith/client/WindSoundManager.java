@@ -12,6 +12,7 @@ import net.minecraft.util.RandomSource;
  */
 public final class WindSoundManager {
     private static WindLoopSound activeSound;
+    private static int retryCooldown = 0;
 
     private WindSoundManager() {}
 
@@ -21,11 +22,21 @@ public final class WindSoundManager {
             stop();
             return;
         }
-        if (activeSound == null || !mc.getSoundManager().isActive(activeSound)) {
+        if (activeSound == null) {
             activeSound = new WindLoopSound();
             mc.getSoundManager().play(activeSound);
+            retryCooldown = 0;
+        } else if (!mc.getSoundManager().isActive(activeSound)) {
+            // 声音系统重载偶尔会丢实例；节流重试，别每 tick 狂建
+            if (++retryCooldown >= 20) {
+                retryCooldown = 0;
+                activeSound = new WindLoopSound();
+                mc.getSoundManager().play(activeSound);
+            }
+        } else {
+            retryCooldown = 0;
         }
-        // 音量/音高在 WindLoopSound.tick() 中每 tick 更新
+        // 音量/音高在 WindLoopSound.tick() 中每 tick 更新，不重建实例
     }
 
     public static void stop() {
@@ -43,6 +54,12 @@ public final class WindSoundManager {
             this.attenuation = SoundInstance.Attenuation.NONE;
             this.volume = 0;
             this.pitch = 0.9f;
+        }
+
+        // 零音量起播：不覆写的话 SoundEngine.play 直接把实例跳过，永远注册不上
+        @Override
+        public boolean canStartSilent() {
+            return true;
         }
 
         @Override

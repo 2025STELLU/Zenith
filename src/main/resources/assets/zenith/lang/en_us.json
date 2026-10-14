@@ -11,5 +11,18 @@
   "message.zenith.fan_speed": "Fan speed: %s",
   "message.zenith.wind_meter": "Wind %s m/s (%s %s°) turbulence %s",
   "message.zenith.wind_meter_unavailable": "Wind data unavailable",
-  "screen.zenith.meteorological_map": "Meteorological Map"
+  "screen.zenith.meteorological_map": "Meteorological Map",
+  "zenith.command.not_initialized": "Wind field not initialized in this dimension",
+  "zenith.command.status": "Zenith status [%s]\nStorm activity: %.2f  Tornadoes: %d\nThermals: %d  Storm cells: %d  Typhoons: %d  Sea-breeze front: %.0fm",
+  "zenith.command.wind_unavailable": "Wind data unavailable",
+  "zenith.command.wind": "Wind: %.1f m/s (%.1f, %.1f, %.1f)  Turbulence: %.0f%%  Sheltered: %s",
+  "zenith.command.storm_spawned": "Spawned a storm cell (mature) at your feet",
+  "zenith.command.typhoon_spawned": "Spawned a typhoon 300m to the east",
+  "zenith.command.thermal_spawned": "Spawned a test thermal",
+  "zenith.command.seabreeze": "Sea breeze: (%.1f, %.1f, %.1f) m/s  Front inland: %.0fm",
+  "zenith.command.polar_failed": "Polar computation failed: %s",
+  "zenith.command.polar_header": "α → Cl / Cd:",
+  "zenith.command.polar_row": "  %+.0f°: %.3f / %.4f",
+  "zenith.command.yes": "Yes",
+  "zenith.command.no": "No"
 }

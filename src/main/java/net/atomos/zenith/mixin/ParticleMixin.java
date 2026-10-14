@@ -1,11 +1,8 @@
 package net.atomos.zenith.mixin;
 
-import net.atomos.zenith.client.ZenithParticleWind;
-import net.minecraft.client.multiplayer.ClientLevel;
+import net.atomos.zenith.client.ClientWindState;
 import net.minecraft.client.particle.FlameParticle;
 import net.minecraft.client.particle.Particle;
-import net.minecraft.world.phys.Vec3;
-import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
@@ -16,10 +13,6 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(Particle.class)
 abstract class ParticleMixin {
     @Shadow
-    @Final
-    protected ClientLevel level;
-
-    @Shadow
     protected double x;
     @Shadow
     protected double y;
@@ -28,8 +21,6 @@ abstract class ParticleMixin {
     @Shadow
     protected double xd;
     @Shadow
-    protected double yd;
-    @Shadow
     protected double zd;
 
     @Inject(method = "tick", at = @At("TAIL"))
@@ -37,10 +28,11 @@ abstract class ParticleMixin {
         if (!(((Object) this) instanceof FlameParticle)) {
             return;
         }
-        Vec3 next = ZenithParticleWind.applyTorchFlame(
-                this.level, this.x, this.y, this.z, new Vec3(this.xd, this.yd, this.zd));
-        this.xd = next.x;
-        this.yd = next.y;
-        this.zd = next.z;
+        // 一阶松弛：火苗轻、响应快（τ≈2 tick）；只掰水平方向，垂直保持原版燃烧上升。
+        // 风场是 m/s，xd 单位是 block/tick（1 tick = 1/20 s），所以除以 20。
+        var wind = ClientWindState.get().sampleCoarse(this.x, this.y + 0.12, this.z);
+        double k = 1.0 - Math.exp(-1.0 / 2.0);
+        this.xd += (wind.x() / 20.0 - this.xd) * k;
+        this.zd += (wind.z() / 20.0 - this.zd) * k;
     }
 }

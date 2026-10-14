@@ -1,59 +1,45 @@
-================================================================================
-ZENITH LICENSE v1.0
-Copyright (c) 2026 Atomos (2025STELLU)
+================================================================
+Zenith License
+Copyright (c) 2026 2025STELLU
 All Rights Reserved.
-================================================================================
+================================================================
 
-1. SCOPE
+这份许可是我给 Zenith 定下的规矩，一共四条，读完再用。
 
-This license governs the original contributions of the copyright holder to
-the Zenith software (the "Software"). Portions of the Software derived from
-Aerodynamics4MC-Core, Copyright (c) MozillaFiredoge, remain governed by the
-MIT License; the full text is included under THIRD_PARTY_LICENSES/ and its
-terms continue to apply to those portions.
+1. 禁止非授权商用
+   没经过我书面同意，不许拿 Zenith（包括它的代码、资源、
+   创意玩法）去赚钱：卖本体、卖整合包席位、绑进付费服务，
+   都算商用。想谈合作可以找我聊，聊拢了就行。
 
-2. GRANT OF RIGHTS (NON-COMMERCIAL, WITH ATTRIBUTION)
+2. 禁止未授权二次分发
+   不许私自转载、搬运、 re-upload 到任何平台（包括但不限于
+   Modrinth、CurseForge、网盘、QQ 群文件）。想分享的话，
+   转发官方发布链接就行。
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of the Software and associated documentation files, to use, copy, modify,
-merge, publish and distribute copies of the Software for Non-Commercial
-purposes only, subject to the conditions in Section 3.
+3. 允许在署名情况下的改动
+   你可以改代码、做魔改版自己玩，前提是：保留原作者署名
+   （2025STELLU），并在显眼位置注明"基于 Zenith 修改"。
+   改了哪个文件，最好顺手留个注释说明改了什么。
 
-"Non-Commercial" means not primarily intended for or directed toward
-commercial advantage or monetary compensation, including but not limited to:
-selling copies of the Software, offering the Software for a fee, or bundling
-it into a paid product or service.
+4. 禁止基于改动做同赛道竞品
+   不许拿 Zenith（或它的魔改版）为底子，做一个玩法、定位
+   高度重合的天气/风场模组来分流。借鉴思路可以，照抄换皮
+   抢赛道不行——这条是底线。
 
-Any Commercial use requires the prior written permission of the copyright
-holder.
+违反以上任何一条，我保留追究的权利。
 
-3. CONDITIONS
+本软件按"原样"提供，不作任何明示或暗示的保证。在任何情况下，
+作者不对因使用本软件产生的任何损失负责。
 
-a) The copyright notice above, this permission notice, and the attribution
-   notice in Section 5 must be included in all copies or substantial
-   portions of the Software.
-b) Any file you modify must carry a prominent notice stating that you
-   changed it.
-c) You may not present a modified version as the original, nor use the
-   copyright holder's name to endorse or promote derived products without
-   prior written permission.
+----------------------------------------------------------------
+All rights reserved by 2025STELLU.
 
-4. NO WARRANTY
+1. No commercial use without prior written permission.
+2. No redistribution or re-upload without permission — share the
+   official release link instead.
+3. Modifications are allowed provided you keep the original
+   attribution (2025STELLU) and clearly state it is based on Zenith.
+4. No competing weather/wind mods substantially overlapping with
+   Zenith built upon this software or its modifications.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-THE SOFTWARE.
-
-5. ATTRIBUTION
-
-- atomos (2025STELLU) — original author of Zenith.
-- MozillaFiredoge — author of Aerodynamics4MC-Core
-  (https://github.com/MozillaFiredoge/Aerodynamics4MC-Core), whose
-  wind/weather system architecture and algorithms were ported and rewritten
-  for Zenith under the MIT License.
-
-Redistribution without this attribution notice is prohibited.
+This software is provided "as is", without warranty of any kind.

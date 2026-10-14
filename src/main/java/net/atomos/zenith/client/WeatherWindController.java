@@ -36,11 +36,11 @@ public final class WeatherWindController {
             double x = px + (RANDOM.nextDouble() - 0.5) * 40;
             double z = pz + (RANDOM.nextDouble() - 0.5) * 40;
             double y = py + 8 + RANDOM.nextDouble() * 10;
-            // 雨丝：用 spray 粒子冒充雨滴，初速带上风和下落分量
+            // 雨丝：用 spray 粒子冒充雨滴；水平初速取当地风速（block/tick），下落取雨滴终端速度
             var wind = ClientWindState.get().sampleCoarse(x, y, z);
-            double fallSpeed = thundering ? 2.2 : 1.6;
+            double fallSpeed = 0.45; // 9 m/s，雨滴终端速度；以前 1.6~2.2 block/tick 是 32~44 m/s，离谱
             level.addParticle(ZenithParticles.SPRAY.get(), x, y, z,
-                    wind.x() * 0.35, -fallSpeed, wind.z() * 0.35);
+                    wind.x() * 0.05, -fallSpeed, wind.z() * 0.05);
         }
 
         // 冰雹：快照中有高雹强风暴单体在附近
@@ -54,8 +54,9 @@ public final class WeatherWindController {
                     double z = pz + (RANDOM.nextDouble() - 0.5) * 30;
                     double y = py + 10 + RANDOM.nextDouble() * 8;
                     var wind = ClientWindState.get().sampleCoarse(x, y, z);
+                    // 初速用 block/tick（风速 m/s 除以 20），provider 里再取 0.25 耦合
                     level.addParticle(ZenithParticles.HAIL.get(), x, y, z,
-                            wind.x() * 0.2, 0, wind.z() * 0.2);
+                            wind.x() * 0.05, 0, wind.z() * 0.05);
                 }
             }
         }

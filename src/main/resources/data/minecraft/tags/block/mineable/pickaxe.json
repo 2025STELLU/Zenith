@@ -1,0 +1,9 @@
+{
+  "replace": false,
+  "values": [
+    "zenith:fan",
+    "zenith:duct",
+    "zenith:wind_vane",
+    "zenith:wind_turbine_probe"
+  ]
+}

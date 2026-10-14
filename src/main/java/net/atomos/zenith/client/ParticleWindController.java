@@ -4,6 +4,7 @@ import net.atomos.zenith.particle.ZenithParticles;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
+import net.minecraft.tags.BiomeTags;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.CampfireBlock;
 import net.minecraft.world.level.block.state.BlockState;
@@ -67,12 +68,12 @@ public final class ParticleWindController {
             }
         }
 
-        // 落叶：森林附近
+        // 落叶：森林附近（别用 biome.toString() 猜名字，永远匹配不上；直接问标签）
         if (tickCounter % 10 == 0 && speed > 1.5) {
             BlockPos bp = new BlockPos((int) px, (int) py, (int) pz);
-            var biome = level.getBiome(bp).value();
-            String bn = biome.toString().toLowerCase();
-            if (bn.contains("forest") || bn.contains("jungle") || bn.contains("birch")) {
+            var biome = level.getBiome(bp);
+            if (biome.is(BiomeTags.IS_FOREST) || biome.is(BiomeTags.IS_JUNGLE)
+                    || biome.is(BiomeTags.IS_TAIGA)) {
                 double x = px + (RANDOM.nextDouble() - 0.5) * 24;
                 double z = pz + (RANDOM.nextDouble() - 0.5) * 24;
                 level.addParticle(ZenithParticles.LEAF.get(), x, py + 4 + RANDOM.nextDouble() * 4, z, 0, 0, 0);

@@ -7,7 +7,7 @@ import net.minecraft.world.phys.Vec3;
 
 /**
  * 原版粒子的风响应：mixin 钩子调这里，采样源是客户端粗风场。
- * 算法搬自 Aerodynamics4MC（MIT），只换了采样实现。
+ * 算法思路参考 Aerodynamics4MC，采样实现为独立编写。
  */
 public final class ZenithParticleWind {
     private static final double MIN_WIND_SPEED = 0.01;

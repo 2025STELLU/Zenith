@@ -11,8 +11,8 @@ import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.ClientTickEvent;
 import net.neoforged.neoforge.client.event.RegisterClientCommandsEvent;
 
-/** 客户端指令：/zenithc visualizer|map（MOD 总线）。 */
-@EventBusSubscriber(value = Dist.CLIENT, bus = EventBusSubscriber.Bus.MOD)
+/** 客户端指令：/zenithc visualizer|map（游戏总线，NeoForge 1.21.1 用 Bus.GAME）。 */
+@EventBusSubscriber(value = Dist.CLIENT, bus = EventBusSubscriber.Bus.GAME)
 public final class ZenithClientCommands {
     private ZenithClientCommands() {}
 

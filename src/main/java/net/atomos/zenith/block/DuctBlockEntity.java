@@ -30,17 +30,17 @@ public class DuctBlockEntity extends BlockEntity {
         double oy = p.getY() + 0.5 + facing.getStepY() * 0.6;
         double oz = p.getZ() + 0.5 + facing.getStepZ() * 0.6;
         if (!wind.isTrustedForGameplay()) {
-            JetSourceRegistry.unregisterAt(ox, oy, oz);
+            JetSourceRegistry.unregisterAt(serverLevel.dimension(), ox, oy, oz);
             return;
         }
         ZenithVec3 v = wind.meanVelocityVector();
         double speed = v.length();
         if (speed < 0.8) {
-            JetSourceRegistry.unregisterAt(ox, oy, oz);
+            JetSourceRegistry.unregisterAt(serverLevel.dimension(), ox, oy, oz);
             return;
         }
         // 接力：取风的大小，方向听风道的
-        JetSourceRegistry.register(new LocalFlowSolver.Jet(
+        JetSourceRegistry.register(serverLevel.dimension(), new LocalFlowSolver.Jet(
                 ox, oy, oz,
                 facing.getStepX(), facing.getStepY(), facing.getStepZ(),
                 (float) Math.min(14, speed * 1.15), 1.6, 10));
@@ -50,10 +50,12 @@ public class DuctBlockEntity extends BlockEntity {
     public void setRemoved() {
         BlockPos p = getBlockPos();
         Direction facing = getBlockState().getValue(DuctBlock.FACING);
-        JetSourceRegistry.unregisterAt(
-                p.getX() + 0.5 + facing.getStepX() * 0.6,
-                p.getY() + 0.5 + facing.getStepY() * 0.6,
-                p.getZ() + 0.5 + facing.getStepZ() * 0.6);
+        if (level != null) {
+            JetSourceRegistry.unregisterAt(level.dimension(),
+                    p.getX() + 0.5 + facing.getStepX() * 0.6,
+                    p.getY() + 0.5 + facing.getStepY() * 0.6,
+                    p.getZ() + 0.5 + facing.getStepZ() * 0.6);
+        }
         super.setRemoved();
     }
 }

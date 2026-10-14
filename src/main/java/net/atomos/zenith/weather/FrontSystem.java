@@ -66,17 +66,25 @@ public class FrontSystem implements WeatherPhenomenon {
             double cx = anchor.getX() + Math.cos(ang) * dist;
             double cz = anchor.getZ() + Math.sin(ang) * dist;
             var l1s = ctx.l1().sample(cx, 120, cz);
-            double windDir = Math.atan2(l1s.windX(), l1s.windZ());
 
             Front f = new Front();
             f.type = random.nextDouble() < 0.55 ? FrontType.COLD : FrontType.WARM;
-            // 锋线走向：大致垂直于引导气流
-            double lineAng = windDir + Math.PI / 2 + (random.nextDouble() - 0.5) * 0.6;
+            // 锋线走向：垂直于引导气流。旧公式把 atan2(x,z) 的"从 +Z 量起"
+            // 按"从 +X 量起"解释了，正东/正南风下线会平行于风。
+            // 线本身没有方向，这里取让 normal() 指向下风（移动方向）的那一侧。
+            double wx = l1s.windX(), wz = l1s.windZ();
+            double w = Math.hypot(wx, wz);
+            if (w < 0.3) { wx = 1; wz = 0; w = 1; }  // 近静风：默认东风，方向才有定义
+            double ldx = wz / w, ldz = -wx / w;      // 线方向 ⟂ 风
+            double jit = (random.nextDouble() - 0.5) * 0.6;  // 锋线只是"大致"垂直，抖一下
+            double cj = Math.cos(jit), sj = Math.sin(jit);
+            double lineDirX = ldx * cj - ldz * sj;
+            double lineDirZ = ldx * sj + ldz * cj;
             double halfLen = 250 + random.nextDouble() * 350;
-            f.x1 = cx - Math.cos(lineAng) * halfLen;
-            f.z1 = cz - Math.sin(lineAng) * halfLen;
-            f.x2 = cx + Math.cos(lineAng) * halfLen;
-            f.z2 = cz + Math.sin(lineAng) * halfLen;
+            f.x1 = cx - lineDirX * halfLen;
+            f.z1 = cz - lineDirZ * halfLen;
+            f.x2 = cx + lineDirX * halfLen;
+            f.z2 = cz + lineDirZ * halfLen;
             double steer = Math.hypot(l1s.windX(), l1s.windZ());
             double[] n = f.normal();
             // 冷锋往暖区拱，暖锋往冷区拱——移动方向正好相反

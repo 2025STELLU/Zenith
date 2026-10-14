@@ -31,7 +31,9 @@ public class WindVaneRenderer implements BlockEntityRenderer<WindVaneBlockEntity
         // 箭头（绕 Y 旋转）
         pose.pushPose();
         pose.translate(0, 0.92f, 0);
-        pose.mulPose(com.mojang.math.Axis.YP.rotationDegrees(-be.getArrowYawDegrees()));
+        // 箭头模型朝 +Z；yaw=atan2(x,z)，0=南(+Z)、90=东(+X)。
+        // Axis.YP 正旋转把 +Z 转向 +X，所以直接用 yaw（原来取了负号，东西镜像）
+        pose.mulPose(com.mojang.math.Axis.YP.rotationDegrees(be.getArrowYawDegrees()));
         // 箭杆
         ClientRenderHelper.renderBox(pose, vc,
                 -0.02f, -0.02f, -0.35f, 0.02f, 0.02f, 0.35f,

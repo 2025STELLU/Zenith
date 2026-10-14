@@ -60,8 +60,8 @@ public final class TornadoRenderer {
 
         Minecraft mc = Minecraft.getInstance();
         PoseStack pose = event.getPoseStack();
-        VertexConsumer vc = mc.renderBuffers().bufferSource()
-                .getBuffer(ClientRenderHelper.FLAT_TRANSLUCENT);
+        var buffers = mc.renderBuffers().bufferSource();
+        VertexConsumer vc = buffers.getBuffer(ClientRenderHelper.FLAT_TRANSLUCENT);
 
         pose.pushPose();
         pose.translate(-camPos.x, -camPos.y, -camPos.z);
@@ -81,6 +81,8 @@ public final class TornadoRenderer {
                     rotPhase, t.intensity01());
         }
         pose.popPose();
+        // 画完立刻 flush，别等后续隐式刷——不然可能被别的矩阵带偏或拖一帧
+        buffers.endBatch(ClientRenderHelper.FLAT_TRANSLUCENT);
     }
 
     private static double distSq(WeatherSnapshotPacket.TornadoInfo t, Vec3 cam) {

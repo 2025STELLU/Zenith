@@ -1,6 +1,6 @@
 # Zenith 天气系统设计
 
-> 移植自 Aerodynamics4MC-Core（MIT）的部分见各 Java 文件头注释。
+> 设计思路受 Aerodynamics4MC-Core 启发，本项目为 cleanroom 独立实现，未复制其源码。
 > 本文档描述 Zenith 新增的四个天气系统与纯 Java L2 求解器。
 
 ## 1. 纯 Java L2 本地流场求解器（`wind.LocalFlowSolver`）

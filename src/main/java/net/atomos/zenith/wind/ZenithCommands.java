@@ -19,7 +19,9 @@ import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.RegisterCommandsEvent;
 
 /**
- * 服务端指令：/zenith status|wind|storm|typhoon|thermal|seabreeze。
+ * 服务端指令：/zenith status|wind|storm|typhoon|thermal|seabreeze|polar。
+ * 会实际改写世界天气的子命令（storm/typhoon/thermal）要 OP 2 级；
+ * 纯查询的不拦。
  */
 public final class ZenithCommands {
     private ZenithCommands() {}
@@ -39,15 +41,14 @@ public final class ZenithCommands {
                     var runtime = ZenithServerRuntime.get();
                     var state = runtime.debugState(level.dimension());
                     if (state == null) {
-                        src.sendFailure(Component.literal("该维度风场尚未初始化"));
+                        src.sendFailure(Component.translatable("zenith.command.not_initialized"));
                         return 0;
                     }
-                    src.sendSuccess(() -> Component.literal(String.format(
-                            "Zenith 状态 [%s]\n风暴活动度: %.2f  龙卷: %d\n热泡: %d  风暴单体: %d  台风: %d  海风锋: %.0fm",
+                    src.sendSuccess(() -> Component.translatable("zenith.command.status",
                             level.dimension().location(),
                             state.driver.stormActivity(), state.driver.activeTornadoCount(),
                             state.thermals.activeCount(), state.storms.activeCount(),
-                            state.typhoons.activeCount(), state.seaBreeze.frontInlandDistance())),
+                            state.typhoons.activeCount(), state.seaBreeze.frontInlandDistance()),
                             false);
                     return 1;
                 }))
@@ -57,38 +58,38 @@ public final class ZenithCommands {
                     GameplayWindSample wind = ZenithMinecraftWindApi.sampleGameplay(
                             player.serverLevel(), player.getEyePosition());
                     if (!wind.isTrustedForGameplay()) {
-                        src.sendFailure(Component.literal("风场数据不可用"));
+                        src.sendFailure(Component.translatable("zenith.command.wind_unavailable"));
                         return 0;
                     }
                     ZenithVec3 v = wind.effectiveVelocityVector();
-                    src.sendSuccess(() -> Component.literal(String.format(
-                            "风速: %.1f m/s (%.1f, %.1f, %.1f)  湍流: %.0f%%  遮蔽: %s",
+                    src.sendSuccess(() -> Component.translatable("zenith.command.wind",
                             v.length(), v.x(), v.y(), v.z(),
                             wind.turbulenceIntensity() * 100,
-                            wind.isSheltered() ? "是" : "否")), false);
+                            Component.translatable(wind.isSheltered()
+                                    ? "zenith.command.yes" : "zenith.command.no")), false);
                     return 1;
                 }))
-                .then(Commands.literal("storm").executes(ctx -> {
+                .then(Commands.literal("storm").requires(src -> src.hasPermission(2)).executes(ctx -> {
                     CommandSourceStack src = ctx.getSource();
                     ServerPlayer player = src.getPlayerOrException();
                     var state = ZenithServerRuntime.get().debugState(player.serverLevel().dimension());
                     if (state == null) return 0;
                     BlockPos p = player.blockPosition();
                     state.storms.spawnDebug(p.getX(), p.getZ());
-                    src.sendSuccess(() -> Component.literal("已在脚下生成风暴单体（成熟期）"), true);
+                    src.sendSuccess(() -> Component.translatable("zenith.command.storm_spawned"), true);
                     return 1;
                 }))
-                .then(Commands.literal("typhoon").executes(ctx -> {
+                .then(Commands.literal("typhoon").requires(src -> src.hasPermission(2)).executes(ctx -> {
                     CommandSourceStack src = ctx.getSource();
                     ServerPlayer player = src.getPlayerOrException();
                     var state = ZenithServerRuntime.get().debugState(player.serverLevel().dimension());
                     if (state == null) return 0;
                     BlockPos p = player.blockPosition();
                     state.typhoons.spawnDebug(p.getX() + 300, p.getZ());
-                    src.sendSuccess(() -> Component.literal("已在东侧 300m 生成台风"), true);
+                    src.sendSuccess(() -> Component.translatable("zenith.command.typhoon_spawned"), true);
                     return 1;
                 }))
-                .then(Commands.literal("thermal").executes(ctx -> {
+                .then(Commands.literal("thermal").requires(src -> src.hasPermission(2)).executes(ctx -> {
                     CommandSourceStack src = ctx.getSource();
                     ServerPlayer player = src.getPlayerOrException();
                     var state = ZenithServerRuntime.get().debugState(player.serverLevel().dimension());
@@ -96,7 +97,7 @@ public final class ZenithCommands {
                     BlockPos p = player.blockPosition();
                     state.thermals.spawnDebug(p.getX() + 20, p.getZ(),
                             player.serverLevel().getSeaLevel());
-                    src.sendSuccess(() -> Component.literal("已生成测试热泡"), true);
+                    src.sendSuccess(() -> Component.translatable("zenith.command.thermal_spawned"), true);
                     return 1;
                 }))
                 .then(Commands.literal("seabreeze").executes(ctx -> {
@@ -106,9 +107,8 @@ public final class ZenithCommands {
                     if (state == null) return 0;
                     Vec3 eye = player.getEyePosition();
                     var c = state.seaBreeze.sample(eye.x, eye.y, eye.z, 0, 0);
-                    src.sendSuccess(() -> Component.literal(String.format(
-                            "海风贡献: (%.1f, %.1f, %.1f) m/s  海风锋离岸: %.0fm",
-                            c.vx(), c.vy(), c.vz(), state.seaBreeze.frontInlandDistance())), false);
+                    src.sendSuccess(() -> Component.translatable("zenith.command.seabreeze",
+                            c.vx(), c.vy(), c.vz(), state.seaBreeze.frontInlandDistance()), false);
                     return 1;
                 }))
                 .then(Commands.literal("polar")
@@ -125,12 +125,15 @@ public final class ZenithCommands {
                                                     .angleSweep(-15, 15, 3).build();
                                             var res = net.atomos.zenith.api.ZenithWindApi.runPolar(req);
                                             if (!res.succeeded()) {
-                                                src.sendFailure(Component.literal("极线计算失败: " + res.message()));
+                                                src.sendFailure(Component.translatable(
+                                                        "zenith.command.polar_failed", res.message()));
                                                 return 0;
                                             }
-                                            StringBuilder sb = new StringBuilder("α → Cl / Cd:\n");
+                                            String header = Component.translatable("zenith.command.polar_header").getString();
+                                            String rowFmt = Component.translatable("zenith.command.polar_row").getString();
+                                            StringBuilder sb = new StringBuilder(header).append('\n');
                                             for (var s : res.table().samples()) {
-                                                sb.append(String.format("  %+.0f°: %.3f / %.4f\n",
+                                                sb.append(String.format(rowFmt,
                                                         s.angleDegrees(), s.cl(), s.cd()));
                                             }
                                             src.sendSuccess(() -> Component.literal(sb.toString()), false);

@@ -3,6 +3,7 @@ package net.atomos.zenith.entity;
 import net.atomos.zenith.api.GameplayWindSample;
 import net.atomos.zenith.api.ZenithVec3;
 import net.atomos.zenith.api.minecraft.ZenithMinecraftWindApi;
+import net.atomos.zenith.item.ZenithItems;
 import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.syncher.EntityDataAccessor;
@@ -11,9 +12,11 @@ import net.minecraft.network.syncher.SynchedEntityData;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
+import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.material.Fluids;
 import net.minecraft.world.phys.Vec3;
@@ -119,6 +122,27 @@ public class SailboatEntity extends Entity {
             return InteractionResult.SUCCESS;
         }
         return InteractionResult.PASS;
+    }
+
+    // 准星射线得能选中船，不然右键上不了船
+    @Override
+    public boolean isPickable() { return true; }
+
+    // 能打掉：掉一个帆船物品，船消失（别搞无敌）
+    @Override
+    public boolean hurt(DamageSource source, float amount) {
+        if (this.isInvulnerableTo(source)) return false;
+        if (!level().isClientSide) {
+            this.spawnAtLocation(ZenithItems.SAILBOAT.get());
+            this.discard();
+        }
+        return true;
+    }
+
+    // 创造模式中键选取：给帆船物品
+    @Override
+    public ItemStack getPickResult() {
+        return new ItemStack(ZenithItems.SAILBOAT.get());
     }
 
     @Override

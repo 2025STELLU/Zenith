@@ -27,11 +27,16 @@ public class WindMeterItem extends Item {
             if (wind.isTrustedForGameplay()) {
                 ZenithVec3 v = wind.effectiveVelocityVector();
                 double speed = v.length();
+                // dirDeg：atan2(x,z) 的度数，0=南(+Z)、90=东(+X)；这是风的去向
                 double dirDeg = Math.toDegrees(Math.atan2(v.x(), v.z()));
-                String compass = compass16(dirDeg);
+                // 转成"北为0、顺时针"的罗盘角：南0→180、东90→90（原来这里+180写反了，东西互换）
+                double toBearing = (180 - dirDeg + 360) % 360;
+                // 气象惯例报来向
+                double fromBearing = (toBearing + 180) % 360;
+                String compass = compass16(fromBearing);
                 serverPlayer.displayClientMessage(Component.translatable("message.zenith.wind_meter",
                         String.format("%.1f", speed), compass,
-                        String.format("%.0f", Math.toDegrees(dirDeg)),
+                        String.format("%.0f", fromBearing),
                         String.format("%.0f%%", wind.turbulenceIntensity() * 100)), true);
             } else {
                 serverPlayer.displayClientMessage(
@@ -41,13 +46,10 @@ public class WindMeterItem extends Item {
         return InteractionResultHolder.sidedSuccess(stack, level.isClientSide);
     }
 
-    private static String compass16(double dirDeg) {
+    /** bearing："北为0、顺时针"的罗盘角，转 16 方位名。 */
+    private static String compass16(double bearing) {
         String[] names = {"N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
                 "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"};
-        // dirDeg: atan2(x, z)，0=南(+Z)；转成以北为0
-        double north0 = (dirDeg + 180 + 360) % 360;
-        // 这是风向（风的去向）；通常报来向，加180
-        double from = (north0 + 180) % 360;
-        return names[(int) Math.round(from / 22.5) % 16];
+        return names[(int) Math.round(bearing / 22.5) % 16];
     }
 }
