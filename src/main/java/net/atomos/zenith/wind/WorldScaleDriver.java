@@ -250,7 +250,7 @@ public class WorldScaleDriver {
         }
 
         void advance(double dt, Random random, int gridCells) {
-            // 生命史相位：周期照抄原版公式（24000*2/20 秒）
+            // 气旋一生走完要 2 个游戏日：相位转满一圈 = 24000 tick × 2 ÷ 20
             phase += dt * (Math.PI * 2.0) / (24000.0 * 2.0 / 20.0);
             intensity = 0.35 + 0.65 * (0.5 + 0.5 * Math.sin(phase));
             x += dt * 0.004 * Math.cos(phase * 0.3);

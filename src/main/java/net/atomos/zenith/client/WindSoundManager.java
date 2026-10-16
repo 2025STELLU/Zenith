@@ -48,6 +48,10 @@ public final class WindSoundManager {
     }
 
     static class WindLoopSound extends AbstractTickableSoundInstance {
+        private int skySampleTick = 0;
+        /** 天空可见度 0~1：野外=1、室内≈0。默认先当野外，采到样再说。 */
+        private float skyExposure = 1.0f;
+
         WindLoopSound() {
             super(ZenithSounds.WIND_LOOP.get(), SoundSource.AMBIENT, RandomSource.create());
             this.looping = true;
@@ -72,10 +76,23 @@ public final class WindSoundManager {
             var p = mc.player;
             var wind = ClientWindState.get().sampleCoarse(p.getX(), p.getY(), p.getZ());
             double speed = Math.hypot(wind.x(), wind.z());
-            // 1.5 m/s 以下几乎无声，18 m/s 满音量
+            // 每 10 tick 看一眼头顶：室内风声就小下去，野外不受影响
+            if (++skySampleTick >= 10) {
+                skySampleTick = 0;
+                var base = p.blockPosition();
+                int open = 0;
+                if (mc.level.canSeeSky(base)) open++;
+                if (mc.level.canSeeSky(base.offset(8, 0, 0))) open++;
+                if (mc.level.canSeeSky(base.offset(-8, 0, 0))) open++;
+                if (mc.level.canSeeSky(base.offset(0, 0, 8))) open++;
+                if (mc.level.canSeeSky(base.offset(0, 0, -8))) open++;
+                skyExposure += (open / 5.0f - skyExposure) * 0.1f;
+            }
+            // 1.5 m/s 以下几乎无声，18 m/s 满音量；室内再打折
             double target = Math.max(0, Math.min(1, (speed - 1.5) / 16.0));
+            double audible = target * 0.55 * (0.25 + 0.75 * skyExposure);
             // 平滑
-            this.volume += (target * 0.55f - this.volume) * 0.08f;
+            this.volume += (audible - this.volume) * 0.08f;
             this.pitch = (float) (0.82 + speed * 0.014);
             if (this.pitch > 1.25f) this.pitch = 1.25f;
         }

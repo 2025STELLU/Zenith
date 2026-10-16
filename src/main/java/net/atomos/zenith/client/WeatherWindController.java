@@ -3,6 +3,9 @@ package net.atomos.zenith.client;
 import net.atomos.zenith.particle.ZenithParticles;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.core.BlockPos;
+import net.minecraft.world.level.biome.Biome;
+import net.minecraft.world.level.levelgen.Heightmap;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
@@ -36,6 +39,11 @@ public final class WeatherWindController {
             double x = px + (RANDOM.nextDouble() - 0.5) * 40;
             double z = pz + (RANDOM.nextDouble() - 0.5) * 40;
             double y = py + 8 + RANDOM.nextDouble() * 10;
+            BlockPos bp = BlockPos.containing(x, y, z);
+            // 沙漠/下界不下雨：降水类型是 NONE 就别硬撒雨丝，雨还是雪交给原版
+            if (level.getBiome(bp).value().getPrecipitationAt(bp) == Biome.Precipitation.NONE) continue;
+            // 头顶有遮挡（屋内、洞穴、树下）不撒：雨丝是露天的
+            if (level.getHeightmapPos(Heightmap.Types.MOTION_BLOCKING, bp).getY() > bp.getY()) continue;
             // 雨丝：用 spray 粒子冒充雨滴；水平初速取当地风速（block/tick），下落取雨滴终端速度
             var wind = ClientWindState.get().sampleCoarse(x, y, z);
             double fallSpeed = 0.45; // 9 m/s，雨滴终端速度；以前 1.6~2.2 block/tick 是 32~44 m/s，离谱

@@ -32,8 +32,13 @@ public final class FogModel {
         return Math.max(0, Math.min(1, d));
     }
 
-    /** 太阳高度因子（与 ThermalSystem 一致的近似）。 */
+    /**
+     * 太阳高度因子 [-1,1]：正午=1、午夜=-1。
+     * 输入 timeOfDay01 = dayTime/24000（0=日出、0.25=正午、0.5=日落、0.75=午夜），
+     * 等价于 cos(level.getTimeOfDay(pt) * 2π)（getTimeOfDay 以正午为 0）。
+     * 以前这里用 sin(2πt−π/2)，峰值落在日落，整整错了 6 小时。
+     */
     public static double solarFactor(double timeOfDay01) {
-        return Math.max(0, Math.sin(timeOfDay01 * Math.PI * 2.0 - Math.PI / 2.0));
+        return Math.cos((timeOfDay01 - 0.25) * Math.PI * 2.0);
     }
 }

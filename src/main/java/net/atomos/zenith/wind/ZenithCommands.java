@@ -26,6 +26,11 @@ import net.neoforged.neoforge.event.RegisterCommandsEvent;
 public final class ZenithCommands {
     private ZenithCommands() {}
 
+    // MC 的 TranslatableContents 只认 %s，不认 %d / %.2f：数字先在服务端格式化成字符串再传进去
+    private static String f(double v, int decimals) {
+        return String.format(java.util.Locale.ROOT, "%." + decimals + "f", v);
+    }
+
     public static void init() {
         NeoForge.EVENT_BUS.addListener(ZenithCommands::register);
     }
@@ -45,10 +50,13 @@ public final class ZenithCommands {
                         return 0;
                     }
                     src.sendSuccess(() -> Component.translatable("zenith.command.status",
-                            level.dimension().location(),
-                            state.driver.stormActivity(), state.driver.activeTornadoCount(),
-                            state.thermals.activeCount(), state.storms.activeCount(),
-                            state.typhoons.activeCount(), state.seaBreeze.frontInlandDistance()),
+                            level.dimension().location().toString(),
+                            f(state.driver.stormActivity(), 2),
+                            String.valueOf(state.driver.activeTornadoCount()),
+                            String.valueOf(state.thermals.activeCount()),
+                            String.valueOf(state.storms.activeCount()),
+                            String.valueOf(state.typhoons.activeCount()),
+                            f(state.seaBreeze.frontInlandDistance(), 0)),
                             false);
                     return 1;
                 }))
@@ -63,8 +71,8 @@ public final class ZenithCommands {
                     }
                     ZenithVec3 v = wind.effectiveVelocityVector();
                     src.sendSuccess(() -> Component.translatable("zenith.command.wind",
-                            v.length(), v.x(), v.y(), v.z(),
-                            wind.turbulenceIntensity() * 100,
+                            f(v.length(), 1), f(v.x(), 1), f(v.y(), 1), f(v.z(), 1),
+                            f(wind.turbulenceIntensity() * 100, 0) + "%",
                             Component.translatable(wind.isSheltered()
                                     ? "zenith.command.yes" : "zenith.command.no")), false);
                     return 1;
@@ -108,7 +116,8 @@ public final class ZenithCommands {
                     Vec3 eye = player.getEyePosition();
                     var c = state.seaBreeze.sample(eye.x, eye.y, eye.z, 0, 0);
                     src.sendSuccess(() -> Component.translatable("zenith.command.seabreeze",
-                            c.vx(), c.vy(), c.vz(), state.seaBreeze.frontInlandDistance()), false);
+                            f(c.vx(), 1), f(c.vy(), 1), f(c.vz(), 1),
+                            f(state.seaBreeze.frontInlandDistance(), 0)), false);
                     return 1;
                 }))
                 .then(Commands.literal("polar")
@@ -129,14 +138,16 @@ public final class ZenithCommands {
                                                         "zenith.command.polar_failed", res.message()));
                                                 return 0;
                                             }
-                                            String header = Component.translatable("zenith.command.polar_header").getString();
-                                            String rowFmt = Component.translatable("zenith.command.polar_row").getString();
-                                            StringBuilder sb = new StringBuilder(header).append('\n');
+                                            // 逐行 translatable：让客户端按自己的语言渲染，别在服务端 getString() 写死英文
+                                            var out = Component.translatable("zenith.command.polar_header");
                                             for (var s : res.table().samples()) {
-                                                sb.append(String.format(rowFmt,
-                                                        s.angleDegrees(), s.cl(), s.cd()));
+                                                out.append(Component.literal("\n")).append(
+                                                        Component.translatable("zenith.command.polar_row",
+                                                                String.format(java.util.Locale.ROOT,
+                                                                        "%+.0f", s.angleDegrees()),
+                                                                f(s.cl(), 3), f(s.cd(), 4)));
                                             }
-                                            src.sendSuccess(() -> Component.literal(sb.toString()), false);
+                                            src.sendSuccess(() -> out, false);
                                             return 1;
                                         })))));
     }

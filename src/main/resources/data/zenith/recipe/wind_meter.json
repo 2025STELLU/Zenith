@@ -1,0 +1,1 @@
+{"category":"equipment","key":{"G":{"item":"minecraft:glass"},"I":{"item":"minecraft:iron_ingot"},"S":{"item":"minecraft:stick"}},"pattern":[" I ","IGI"," S "],"result":{"count":1,"id":"zenith:wind_meter"},"type":"minecraft:crafting_shaped"}

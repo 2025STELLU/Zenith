@@ -43,12 +43,22 @@ public final class ZenithParticleProviders {
         /**
          * 一阶松弛（垂直）：垂直速度趋近"风垂直分量×耦合 + 附加速度"。
          * 附加速度单位 m/s：热浪上浮取正、落叶下沉取负；
-         * 雨/雹/水沫的垂直方向是重力弹道，别调这个，只掰水平。
+         * 雨/雹/水沫别调这个，它们的垂直方向走下面的终端速度。
          */
         protected void applyVertical(double windCoupling, double extraMps, double tauTicks) {
             var v = ClientWindState.get().sampleCoarse(x, y, z);
             double k = 1.0 - Math.exp(-1.0 / tauTicks);
             this.yd += ((v.y() * windCoupling + extraMps) / 20.0 - this.yd) * k;
+        }
+
+        /**
+         * 一阶松弛（终端速度）：垂直速度指数趋近固定的终端下落速度。
+         * friction=1 之后降水粒子的垂直方向只剩重力、会无限加速，
+         * 这里就是它们的"空气阻力"：雨滴约 9 m/s，2cm 冰雹约 20 m/s。
+         */
+        protected void applyTerminalVelocity(double vTermMps, double tauTicks) {
+            double k = 1.0 - Math.exp(-1.0 / tauTicks);
+            this.yd += (-vTermMps / 20.0 - this.yd) * k;
         }
 
         @Override
@@ -190,14 +200,16 @@ public final class ZenithParticleProviders {
                     this.xd = dx;
                     this.yd = dy;
                     this.zd = dz;
-                    gravity = 0.35f;
+                    // 垂直方向不走重力了：终端速度松弛就是阻力，留着 gravity 会把平衡点拉到 20 m/s 去
                 }
 
                 @Override
                 public void tick() {
                     super.tick();
-                    // τ=2 tick：水滴小、跟风快；垂直走重力弹道（水花抛物线/雨滴终端速度），风只掰水平方向
-                    applyWind(1.2, 2.0);
+                    // τ=2 tick：水滴小、跟风快；耦合钳到 1.0，粒子不能比风还快，
+                    // "更斜"的观感以后靠拉伸渲染；垂直收敛到 9 m/s 终端速度
+                    applyWind(1.0, 2.0);
+                    applyTerminalVelocity(9.0, 2.0);
                 }
 
                 @Override
@@ -246,6 +258,45 @@ public final class ZenithParticleProviders {
         }
     }
 
+    /** 雾气：大尺寸、低透明度、慢悠悠随风的软斑，贴地。 */
+    public static class FogProvider implements ParticleProvider<SimpleParticleType> {
+        private final SpriteSet sprites;
+        public FogProvider(SpriteSet sprites) { this.sprites = sprites; }
+
+        @Override
+        public Particle createParticle(SimpleParticleType type, ClientLevel level,
+                                       double x, double y, double z,
+                                       double dx, double dy, double dz) {
+            return new WindDrivenParticle(level, x, y, z, sprites) {
+                private final float baseAlpha = 0.05f + random.nextFloat() * 0.05f;
+
+                {
+                    lifetime = 120 + random.nextInt(80);
+                    // 2~6 格的大软斑：远看是雾，近看也不至于糊一脸
+                    this.quadSize = 2.0f + random.nextFloat() * 4.0f;
+                    setColor(0.92f, 0.95f, 0.97f); // 冷白
+                    setAlpha(baseAlpha);
+                }
+
+                @Override
+                public void tick() {
+                    super.tick();
+                    // τ=6 tick：雾团惯性大，懒洋洋地跟风；垂直不动，贴着地表走
+                    applyWind(1.0, 6.0);
+                    // 渐入渐出，别生硬地弹出/消失
+                    float half = lifetime / 2.0f;
+                    float f = Math.min(1.0f, Math.min(age, lifetime - age) / half);
+                    setAlpha(baseAlpha * Math.max(0.0f, f));
+                }
+
+                @Override
+                public ParticleRenderType getRenderType() {
+                    return ParticleRenderType.PARTICLE_SHEET_TRANSLUCENT;
+                }
+            };
+        }
+    }
+
     public static void registerAll(
             net.neoforged.neoforge.client.event.RegisterParticleProvidersEvent event) {
         event.registerSpriteSet(ZenithParticles.WIND_STREAK.get(), WindStreakProvider::new);
@@ -254,6 +305,7 @@ public final class ZenithParticleProviders {
         event.registerSpriteSet(ZenithParticles.SPRAY.get(), SprayProvider::new);
         event.registerSpriteSet(ZenithParticles.HEAT_SHIMMER.get(), HeatShimmerProvider::new);
         event.registerSpriteSet(ZenithParticles.HAIL.get(), HailProvider::new);
+        event.registerSpriteSet(ZenithParticles.FOG.get(), FogProvider::new);
     }
 
     /** 冰雹：高速下落的冰粒，随风微偏。 */
@@ -270,11 +322,13 @@ public final class ZenithParticleProviders {
                     lifetime = 60;
                     this.quadSize = 0.14f;
                     setColor(0.9f, 0.95f, 1f);
-                    this.yd = -2.5 - random.nextDouble() * 1.5;
+                    // 生下来就是终端速度：-20/20 = -1.0 block/tick（2cm 冰雹约 20 m/s）；
+                    // 以前 -2.5~-4.0 是 50~80 m/s 的炮弹，离谱
+                    this.yd = -20.0 / 20.0;
                     // 初速取 0.25 倍风速（block/tick），和下面的松弛目标一致，省得出生先被掰回来
                     this.xd = dx * 0.25;
                     this.zd = dz * 0.25;
-                    gravity = 0.9f;
+                    // 垂直不走重力，终端速度松弛就是阻力
                 }
 
                 @Override
@@ -282,6 +336,7 @@ public final class ZenithParticleProviders {
                     super.tick();
                     // τ=4 tick：冰雹比雨滴重、响应慢一拍；耦合只取 0.25，风再大也只是微偏
                     applyWind(0.25, 4.0);
+                    applyTerminalVelocity(20.0, 4.0);
                 }
             };
         }

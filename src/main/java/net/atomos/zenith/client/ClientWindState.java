@@ -8,6 +8,8 @@ import net.atomos.zenith.api.client.ZenithClientWindRuntimeProvider;
 import net.atomos.zenith.network.packet.CoarseWindPacket;
 import net.atomos.zenith.network.packet.WeatherSnapshotPacket;
 import net.minecraft.client.Minecraft;
+import net.minecraft.resources.ResourceKey;
+import net.minecraft.world.level.Level;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
@@ -31,6 +33,8 @@ public final class ClientWindState implements ZenithClientWindRuntimeProvider {
 
     private volatile CoarseWindPacket coarseWind;
     private volatile WeatherSnapshotPacket snapshot;
+    /** 上次看到的维度：只在维度真的变了时才清空，死亡同维度重生不清 */
+    private volatile ResourceKey<Level> lastDimension;
 
     private ClientWindState() {}
 
@@ -51,12 +55,18 @@ public final class ClientWindState implements ZenithClientWindRuntimeProvider {
     @SubscribeEvent
     public static void onLogout(ClientPlayerNetworkEvent.LoggingOut event) {
         clear();
+        INSTANCE.lastDimension = null; // 下次进服当新维度处理
     }
 
     @SubscribeEvent
     public static void onPlayerClone(ClientPlayerNetworkEvent.Clone event) {
-        // 换维度时客户端玩家会被重建（走的是 respawn 包），旧维度的快照不能留
-        clear();
+        // 玩家重建（死亡重生 / 换维度都走这里）：维度没变就不清，
+        // 免得死一次风场数据断 2 秒
+        ResourceKey<Level> dim = event.getNewPlayer().level().dimension();
+        if (!dim.equals(INSTANCE.lastDimension)) {
+            clear();
+        }
+        INSTANCE.lastDimension = dim;
     }
 
     public CoarseWindPacket coarseWind() {

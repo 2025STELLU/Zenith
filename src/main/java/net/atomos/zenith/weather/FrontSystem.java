@@ -87,10 +87,10 @@ public class FrontSystem implements WeatherPhenomenon {
             f.z2 = cz + lineDirZ * halfLen;
             double steer = Math.hypot(l1s.windX(), l1s.windZ());
             double[] n = f.normal();
-            // 冷锋往暖区拱，暖锋往冷区拱——移动方向正好相反
-            double dir = f.type == FrontType.COLD ? 1 : -1;
-            f.moveX = n[0] * steer * 0.55 * dir;
-            f.moveZ = n[1] * steer * 0.55 * dir;
+            // 冷暖锋都跟着引导气流顺风走，暖锋只是慢半拍
+            double speedFactor = f.type == FrontType.COLD ? 0.55 : 0.35;
+            f.moveX = n[0] * steer * speedFactor;
+            f.moveZ = n[1] * steer * speedFactor;
             f.intensity01 = 0.5 + stormAct * 0.5;
             fronts.add(f);
         }

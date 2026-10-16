@@ -29,6 +29,16 @@ public class SailboatEntity extends Entity {
             SynchedEntityData.defineId(SailboatEntity.class, EntityDataSerializers.FLOAT);
     private static final EntityDataAccessor<Float> DATA_HEADING =
             SynchedEntityData.defineId(SailboatEntity.class, EntityDataSerializers.FLOAT);
+    // 受击状态：照抄原版船（VehicleEntity）那套，客户端靠它抖
+    private static final EntityDataAccessor<Float> DATA_DAMAGE =
+            SynchedEntityData.defineId(SailboatEntity.class, EntityDataSerializers.FLOAT);
+    private static final EntityDataAccessor<Integer> DATA_HURT_TIME =
+            SynchedEntityData.defineId(SailboatEntity.class, EntityDataSerializers.INT);
+    private static final EntityDataAccessor<Integer> DATA_HURT_DIR =
+            SynchedEntityData.defineId(SailboatEntity.class, EntityDataSerializers.INT);
+
+    /** 拆船阈值：和原版船一样，伤害累积超过 40 才真拆（空拳约 4 下） */
+    private static final float BREAK_DAMAGE = 40.0f;
 
     private double velX, velZ;
     private double headingRadians;
@@ -41,11 +51,24 @@ public class SailboatEntity extends Entity {
     protected void defineSynchedData(SynchedEntityData.Builder builder) {
         builder.define(DATA_SAIL_TRIM, 0.7f);
         builder.define(DATA_HEADING, 0f);
+        builder.define(DATA_DAMAGE, 0f);
+        builder.define(DATA_HURT_TIME, 0);
+        builder.define(DATA_HURT_DIR, 1);
     }
+
+    public float getDamage() { return entityData.get(DATA_DAMAGE); }
+    public void setDamage(float damage) { entityData.set(DATA_DAMAGE, damage); }
+    public int getHurtTime() { return entityData.get(DATA_HURT_TIME); }
+    public void setHurtTime(int time) { entityData.set(DATA_HURT_TIME, time); }
+    public int getHurtDir() { return entityData.get(DATA_HURT_DIR); }
+    public void setHurtDir(int dir) { entityData.set(DATA_HURT_DIR, dir); }
 
     @Override
     public void tick() {
         super.tick();
+        // 受击晃动和伤害随时间衰减（原版船就这么干的）
+        if (getHurtTime() > 0) setHurtTime(getHurtTime() - 1);
+        if (getDamage() > 0) setDamage(getDamage() - 1.0f);
         if (level().isClientSide) {
             // 客户端：插值跟随服务端同步的艏向
             setYRot((float) Math.toDegrees(entityData.get(DATA_HEADING)));
@@ -128,14 +151,22 @@ public class SailboatEntity extends Entity {
     @Override
     public boolean isPickable() { return true; }
 
-    // 能打掉：掉一个帆船物品，船消失（别搞无敌）
+    // 受击：照抄原版船的逻辑——伤害累积，攒够了才拆，创造模式不掉东西
     @Override
     public boolean hurt(DamageSource source, float amount) {
-        if (this.isInvulnerableTo(source)) return false;
-        if (!level().isClientSide) {
-            this.spawnAtLocation(ZenithItems.SAILBOAT.get());
-            this.discard();
+        if (level().isClientSide || isRemoved()) return true;
+        if (isInvulnerableTo(source)) return false;
+        setHurtDir(-getHurtDir());
+        setHurtTime(10);
+        markHurt();
+        setDamage(getDamage() + amount * 10.0f);
+        boolean creative = source.getEntity() instanceof Player player
+                && player.getAbilities().instabuild;
+        if (!creative && getDamage() <= BREAK_DAMAGE) return true; // 阈值以下：只晃，不拆
+        if (!creative) {
+            spawnAtLocation(ZenithItems.SAILBOAT.get());
         }
+        discard();
         return true;
     }
 

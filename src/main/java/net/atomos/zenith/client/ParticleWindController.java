@@ -80,14 +80,14 @@ public final class ParticleWindController {
             }
         }
 
-        // 水沫：风暴/台风
+        // 水沫：风暴/台风；溅射初速 0.1~0.2 block/tick（2~4 m/s），剩下的交给重力+终端速度
         if (stormBoost > 0.45 && tickCounter % 4 == 0) {
             for (int i = 0; i < 3; i++) {
                 double x = px + (RANDOM.nextDouble() - 0.5) * 30;
                 double z = pz + (RANDOM.nextDouble() - 0.5) * 30;
                 double y = py + RANDOM.nextDouble() * 6;
                 level.addParticle(ZenithParticles.SPRAY.get(), x, y, z,
-                        (RANDOM.nextDouble() - 0.5) * 2, 1 + RANDOM.nextDouble() * 2,
+                        (RANDOM.nextDouble() - 0.5) * 2, 0.1 + RANDOM.nextDouble() * 0.1,
                         (RANDOM.nextDouble() - 0.5) * 2);
             }
         }

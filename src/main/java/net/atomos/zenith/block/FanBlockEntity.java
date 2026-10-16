@@ -17,6 +17,7 @@ import net.minecraft.world.level.block.state.BlockState;
  */
 public class FanBlockEntity extends BlockEntity {
     private boolean redstoneOverride = false;
+    private boolean redstoneDirty = false; // 区块刚加载完，首个 tick 再读邻居红石
     private int tickCounter = 0;
 
     public FanBlockEntity(BlockPos pos, BlockState state) {
@@ -33,10 +34,9 @@ public class FanBlockEntity extends BlockEntity {
     @Override
     public void onLoad() {
         super.onLoad();
-        // 区块重载不会重放 neighborChanged，通电的风扇重进会掉回用户档位，这里补一次
-        if (level != null) {
-            this.redstoneOverride = level.hasNeighborSignal(getBlockPos());
-        }
+        // 区块加载中不碰 level 读邻居：相邻区块可能还没就绪，
+        // 跨区块读可能触发额外加载或拿到不完整数据，留到首个 tick 再读
+        this.redstoneDirty = true;
     }
 
     /** 出风口坐标：注册和注销都走这里。写岔一次，就漏一个关不掉的永久射流。 */
@@ -51,6 +51,11 @@ public class FanBlockEntity extends BlockEntity {
 
     public void tick() {
         if (level == null || level.isClientSide) return;
+        if (redstoneDirty) {
+            // 首个服务端 tick：区块都就绪了，这时读邻居红石才安全
+            redstoneDirty = false;
+            setRedstoneOverride(level.hasNeighborSignal(getBlockPos()));
+        }
         if (++tickCounter % 20 != 0) return;
         BlockState state = getBlockState();
         int speedLevel = redstoneOverride ? 3 : state.getValue(FanBlock.SPEED);

@@ -1,10 +1,12 @@
 package net.atomos.zenith.client.render;
 
+import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import net.atomos.zenith.client.ClientWindState;
 import net.atomos.zenith.network.packet.WeatherSnapshotPacket;
 import net.minecraft.client.Minecraft;
+import net.minecraft.util.Mth;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.phys.Vec3;
 import net.neoforged.api.distmarker.Dist;
@@ -78,7 +80,7 @@ public final class TornadoRenderer {
             renderFunnel(pose, vc, (float) t.x(), (float) groundY, (float) t.z(),
                     height, rotPhase, t.intensity01(), camPos);
             renderDustRing(pose, vc, (float) t.x(), (float) groundY, (float) t.z(),
-                    rotPhase, t.intensity01());
+                    rotPhase, t.intensity01(), camPos);
         }
         pose.popPose();
         // 画完立刻 flush，别等后续隐式刷——不然可能被别的矩阵带偏或拖一帧
@@ -159,19 +161,19 @@ public final class TornadoRenderer {
         for (int qi = 0; qi < quadCount; qi++) {
             int q = quadOrder[qi];
             int j = q / RADIAL_SEGS, i = q % RADIAL_SEGS;
-            vert(vc, m, px[j][i], py[j][i], pz[j][i], pr[j][i], pg[j][i], pb[j][i], pa[j][i]);
-            vert(vc, m, px[j + 1][i], py[j + 1][i], pz[j + 1][i], pr[j + 1][i], pg[j + 1][i], pb[j + 1][i], pa[j + 1][i]);
-            vert(vc, m, px[j + 1][i + 1], py[j + 1][i + 1], pz[j + 1][i + 1], pr[j + 1][i + 1], pg[j + 1][i + 1], pb[j + 1][i + 1], pa[j + 1][i + 1]);
-            vert(vc, m, px[j][i], py[j][i], pz[j][i], pr[j][i], pg[j][i], pb[j][i], pa[j][i]);
-            vert(vc, m, px[j + 1][i + 1], py[j + 1][i + 1], pz[j + 1][i + 1], pr[j + 1][i + 1], pg[j + 1][i + 1], pb[j + 1][i + 1], pa[j + 1][i + 1]);
-            vert(vc, m, px[j][i + 1], py[j][i + 1], pz[j][i + 1], pr[j][i + 1], pg[j][i + 1], pb[j][i + 1], pa[j][i + 1]);
+            vert(vc, m, px[j][i], py[j][i], pz[j][i], pr[j][i], pg[j][i], pb[j][i], pa[j][i], camPos);
+            vert(vc, m, px[j + 1][i], py[j + 1][i], pz[j + 1][i], pr[j + 1][i], pg[j + 1][i], pb[j + 1][i], pa[j + 1][i], camPos);
+            vert(vc, m, px[j + 1][i + 1], py[j + 1][i + 1], pz[j + 1][i + 1], pr[j + 1][i + 1], pg[j + 1][i + 1], pb[j + 1][i + 1], pa[j + 1][i + 1], camPos);
+            vert(vc, m, px[j][i], py[j][i], pz[j][i], pr[j][i], pg[j][i], pb[j][i], pa[j][i], camPos);
+            vert(vc, m, px[j + 1][i + 1], py[j + 1][i + 1], pz[j + 1][i + 1], pr[j + 1][i + 1], pg[j + 1][i + 1], pb[j + 1][i + 1], pa[j + 1][i + 1], camPos);
+            vert(vc, m, px[j][i + 1], py[j][i + 1], pz[j][i + 1], pr[j][i + 1], pg[j][i + 1], pb[j][i + 1], pa[j][i + 1], camPos);
         }
     }
 
     /** 地面尘环：扁平圆环，6 条旋转条纹跟漏斗的螺旋带呼应。 */
     private static void renderDustRing(PoseStack pose, VertexConsumer vc,
                                        float cx, float baseY, float cz,
-                                       float rotPhase, float intensity) {
+                                       float rotPhase, float intensity, Vec3 camPos) {
         int segs = 24;
         float innerR = 5.0f, outerR = 14.0f;
         float y = baseY + 0.5f;
@@ -192,12 +194,12 @@ public final class TornadoRenderer {
 
             float c0 = (float) Math.cos(a0), s0 = (float) Math.sin(a0);
             float c1 = (float) Math.cos(a1), s1 = (float) Math.sin(a1);
-            vert(vc, m, cx + c0 * innerR, y, cz + s0 * innerR, BASE_R, BASE_G, BASE_B, aInner);
-            vert(vc, m, cx + c0 * outerR, y, cz + s0 * outerR, BASE_R, BASE_G, BASE_B, aOuter);
-            vert(vc, m, cx + c1 * outerR, y, cz + s1 * outerR, BASE_R, BASE_G, BASE_B, aOuter);
-            vert(vc, m, cx + c0 * innerR, y, cz + s0 * innerR, BASE_R, BASE_G, BASE_B, aInner);
-            vert(vc, m, cx + c1 * outerR, y, cz + s1 * outerR, BASE_R, BASE_G, BASE_B, aOuter);
-            vert(vc, m, cx + c1 * innerR, y, cz + s1 * innerR, BASE_R, BASE_G, BASE_B, aInner);
+            vert(vc, m, cx + c0 * innerR, y, cz + s0 * innerR, BASE_R, BASE_G, BASE_B, aInner, camPos);
+            vert(vc, m, cx + c0 * outerR, y, cz + s0 * outerR, BASE_R, BASE_G, BASE_B, aOuter, camPos);
+            vert(vc, m, cx + c1 * outerR, y, cz + s1 * outerR, BASE_R, BASE_G, BASE_B, aOuter, camPos);
+            vert(vc, m, cx + c0 * innerR, y, cz + s0 * innerR, BASE_R, BASE_G, BASE_B, aInner, camPos);
+            vert(vc, m, cx + c1 * outerR, y, cz + s1 * outerR, BASE_R, BASE_G, BASE_B, aOuter, camPos);
+            vert(vc, m, cx + c1 * innerR, y, cz + s1 * innerR, BASE_R, BASE_G, BASE_B, aInner, camPos);
         }
     }
 
@@ -208,7 +210,27 @@ public final class TornadoRenderer {
 
     private static void vert(VertexConsumer vc, Matrix4f m,
                              float x, float y, float z,
-                             float r, float g, float b, float a) {
+                             float r, float g, float b, float a,
+                             Vec3 camPos) {
+        // POSITION_COLOR 着色器不算雾，不手动掺雾色的话，雾天里龙卷是根发光的灰柱
+        float dx = x - (float) camPos.x;
+        float dy = y - (float) camPos.y;
+        float dz = z - (float) camPos.z;
+        float dist = (float) Math.sqrt(dx * dx + dy * dy + dz * dz);
+        float fogStart = RenderSystem.getShaderFogStart();
+        float fogEnd = RenderSystem.getShaderFogEnd();
+        float span = fogEnd - fogStart;
+        float fog = 0.0f;
+        if (span > 1e-3f) {
+            fog = Mth.clamp((dist - fogStart) / span, 0.0f, 1.0f);
+        }
+        if (fog > 0.0f) {
+            float[] fc = RenderSystem.getShaderFogColor();
+            r = Mth.lerp(fog, r, fc[0]);
+            g = Mth.lerp(fog, g, fc[1]);
+            b = Mth.lerp(fog, b, fc[2]);
+            a *= 1.0f - fog * 0.8f;
+        }
         vc.addVertex(m, x, y, z).setColor(r, g, b, a);
     }
 }

@@ -29,6 +29,9 @@ public final class ZenithParticles {
     /** 冰雹：风暴成熟期的小冰粒。 */
     public static final Supplier<SimpleParticleType> HAIL =
             PARTICLE_TYPES.register("hail", () -> new SimpleParticleType(false));
+    /** 雾气：大尺寸低透明度的软斑，贴地随风。 */
+    public static final Supplier<SimpleParticleType> FOG =
+            PARTICLE_TYPES.register("fog", () -> new SimpleParticleType(false));
 
     private ZenithParticles() {}
 }

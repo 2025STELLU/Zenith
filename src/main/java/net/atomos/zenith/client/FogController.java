@@ -4,6 +4,8 @@ import net.atomos.zenith.particle.ZenithParticles;
 import net.atomos.zenith.weather.FogModel;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.core.BlockPos;
+import net.minecraft.tags.FluidTags;
 import net.minecraft.util.Mth;
 import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.entity.LivingEntity;
@@ -44,9 +46,17 @@ public final class FogController {
 
         boolean raining = level.isRaining();
         double solar = FogModel.solarFactor(level.getDayTime() / 24000.0);
-        boolean overWater = isOverWater(level, (int) cam.getX(), (int) cam.getY(), (int) cam.getZ());
+        // 平流雾看的是"风从哪来"：上风向 32–96 格的水面占比，而不是脚下一格
+        // （不然刚上船/下水就大雾，纯属误伤）
+        double waterFrac = upwindWaterFraction(level, cam.getX(), cam.getY(), cam.getZ(),
+                wind.x(), wind.z());
+        boolean overWater = waterFrac > 0.5;
 
-        currentDensity = FogModel.density(solar, raining, windSpeed, humidity, overWater);
+        double target = FogModel.density(solar, raining, windSpeed, humidity, overWater);
+        // 一阶平滑，τ≈3 秒：走到水边不会"啪"地起雾，离开也不会瞬间散
+        float frameDt = mc.getTimer().getGameTimeDeltaTicks() / 20.0f;
+        if (frameDt <= 0 || frameDt > 1) frameDt = 1 / 20f; // 暂停/切屏回来钳一下
+        currentDensity += (target - currentDensity) * (1 - Math.exp(-frameDt / 3.0));
         if (currentDensity < 0.02) return;
 
         // 浓雾时能见度压到约 24 格；1.21.1 不 cancel 的话改了也白改
@@ -54,6 +64,23 @@ public final class FogController {
         event.setFarPlaneDistance(far);
         event.setNearPlaneDistance(Math.min(event.getNearPlaneDistance(), far * 0.1f));
         event.setCanceled(true);
+    }
+
+    /** 上风向 32–96 格采 8 个点，算水面占比 [0,1]。 */
+    private static double upwindWaterFraction(ClientLevel level, double x, double y, double z,
+                                              double wx, double wz) {
+        double wlen = Math.hypot(wx, wz);
+        // 上风向 = 风矢量的反方向；风太弱时方向没意义，随便取个东向
+        double ux = wlen > 0.3 ? -wx / wlen : 1.0;
+        double uz = wlen > 0.3 ? -wz / wlen : 0.0;
+        int water = 0;
+        int feetY = Mth.floor(y) - 1;
+        for (int i = 0; i < 8; i++) {
+            double d = 32 + i * 8; // 32, 40, …, 96
+            var pos = new BlockPos(Mth.floor(x + ux * d), feetY, Mth.floor(z + uz * d));
+            if (level.getFluidState(pos).is(FluidTags.WATER)) water++;
+        }
+        return water / 8.0;
     }
 
     private static boolean isOverWater(ClientLevel level, int x, int y, int z) {
@@ -73,7 +100,7 @@ public final class FogController {
             double x = p.getX() + (RANDOM.nextDouble() - 0.5) * 36;
             double z = p.getZ() + (RANDOM.nextDouble() - 0.5) * 36;
             double y = p.getY() + RANDOM.nextDouble() * 6 - 1;
-            mc.level.addParticle(ZenithParticles.SPRAY.get(), x, y, z, 0.15, 0.02, 0.15);
+            mc.level.addParticle(ZenithParticles.FOG.get(), x, y, z, 0, 0, 0);
         }
     }
 }
