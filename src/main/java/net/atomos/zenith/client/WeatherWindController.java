@@ -40,8 +40,8 @@ public final class WeatherWindController {
             double z = pz + (RANDOM.nextDouble() - 0.5) * 40;
             double y = py + 8 + RANDOM.nextDouble() * 10;
             BlockPos bp = BlockPos.containing(x, y, z);
-            // 沙漠/下界不下雨：降水类型是 NONE 就别硬撒雨丝，雨还是雪交给原版
-            if (level.getBiome(bp).value().getPrecipitationAt(bp) == Biome.Precipitation.NONE) continue;
+            // 只有真下雨的群系才撒斜雨丝：雪群系原版自己会下雪，别再叠一层斜雨丝上去；沙漠/下界照样不下
+            if (level.getBiome(bp).value().getPrecipitationAt(bp) != Biome.Precipitation.RAIN) continue;
             // 头顶有遮挡（屋内、洞穴、树下）不撒：雨丝是露天的
             if (level.getHeightmapPos(Heightmap.Types.MOTION_BLOCKING, bp).getY() > bp.getY()) continue;
             // 雨丝：用 spray 粒子冒充雨滴；水平初速取当地风速（block/tick），下落取雨滴终端速度

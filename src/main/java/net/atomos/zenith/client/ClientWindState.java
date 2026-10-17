@@ -53,6 +53,13 @@ public final class ClientWindState implements ZenithClientWindRuntimeProvider {
     }
 
     @SubscribeEvent
+    public static void onLoggingIn(ClientPlayerNetworkEvent.LoggingIn event) {
+        // 进服先记下维度：不然第一次死亡重生时 lastDimension 还是 null，
+        // 必判"维度变化"误清一次风场
+        INSTANCE.lastDimension = event.getPlayer().level().dimension();
+    }
+
+    @SubscribeEvent
     public static void onLogout(ClientPlayerNetworkEvent.LoggingOut event) {
         clear();
         INSTANCE.lastDimension = null; // 下次进服当新维度处理

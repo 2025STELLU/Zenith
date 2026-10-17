@@ -142,6 +142,12 @@ public final class ZenithParticleProviders {
                     roll = (float) Math.toRadians(spin);
                     this.xd += Math.sin(age * 0.3) * 0.004;
                 }
+
+                @Override
+                public ParticleRenderType getRenderType() {
+                    // 落叶贴图边缘是半透明的，OPAQUE 下直接锯齿：走 TRANSLUCENT
+                    return ParticleRenderType.PARTICLE_SHEET_TRANSLUCENT;
+                }
             };
         }
     }
@@ -207,9 +213,17 @@ public final class ZenithParticleProviders {
                 public void tick() {
                     super.tick();
                     // τ=2 tick：水滴小、跟风快；耦合钳到 1.0，粒子不能比风还快，
-                    // "更斜"的观感以后靠拉伸渲染；垂直收敛到 9 m/s 终端速度
+                    // "更斜"的观感以后靠拉伸渲染
                     applyWind(1.0, 2.0);
-                    applyTerminalVelocity(9.0, 2.0);
+                    // 同一个 provider 冒充两种东西：雨丝和水沫，垂直速度正负一看便知
+                    if (this.yd > 0) {
+                        // 上升中 = 水沫溅射：终端速度 3.5 m/s、τ=7；
+                        // 以前全按 9 m/s 压，第 1 tick 就把初速压成负的，溅不起来，看着就是雨
+                        applyTerminalVelocity(3.5, 7.0);
+                    } else {
+                        // 下落中 = 雨丝：终端速度 9 m/s、τ=2
+                        applyTerminalVelocity(9.0, 2.0);
+                    }
                 }
 
                 @Override
@@ -337,6 +351,12 @@ public final class ZenithParticleProviders {
                     // τ=4 tick：冰雹比雨滴重、响应慢一拍；耦合只取 0.25，风再大也只是微偏
                     applyWind(0.25, 4.0);
                     applyTerminalVelocity(20.0, 4.0);
+                }
+
+                @Override
+                public ParticleRenderType getRenderType() {
+                    // 冰粒边缘锯齿同落叶：走 TRANSLUCENT
+                    return ParticleRenderType.PARTICLE_SHEET_TRANSLUCENT;
                 }
             };
         }

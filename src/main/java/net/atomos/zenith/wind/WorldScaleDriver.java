@@ -3,6 +3,7 @@ package net.atomos.zenith.wind;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
+import net.atomos.zenith.weather.FogModel;
 
 /**
  * 行星尺度天气驱动，服务端跑的。
@@ -94,8 +95,8 @@ public class WorldScaleDriver {
                 + 0.35 * clamp01(feedback.maxPositiveMoistureConvergence() / 0.01);
         if (thundering) target = Math.max(target, 0.8);
         else if (raining) target = Math.max(target, 0.45);
-        // 晚上对流歇一歇
-        double diurnal = 0.65 + 0.35 * Math.sin(timeOfDay01 * Math.PI * 2.0 - Math.PI / 2.0);
+        // 晚上对流歇一歇：正午最强、午夜最弱（太阳时间统一走 FogModel.solarFactor）
+        double diurnal = 0.65 + 0.35 * FogModel.solarFactor(timeOfDay01);
         target *= 0.7 + 0.3 * diurnal;
         stormActivity += (clamp01(target) - stormActivity)
                 * Math.min(1.0, dtSeconds * STORM_RELAX_PER_SECOND);

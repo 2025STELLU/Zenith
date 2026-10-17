@@ -1,5 +1,7 @@
 package net.atomos.zenith.wind;
 
+import net.atomos.zenith.weather.FogModel;
+
 /**
  * L0 背景天气网格，服务端权威：41×41 格，每格 256 格方块，单层。
  *
@@ -168,7 +170,8 @@ public class BackgroundMetGrid {
                 double biomeT = terrain.biomeTemperatureKelvin(bx, bz) + seasonTempBiasK;
                 double targetAirT = biomeT + drv.temperatureBiasKelvin()
                         - c.terrainHeight * ALTITUDE_LAPSE_RATE_K_PER_BLOCK;
-                double solarHeating = 6.0 * Math.max(0, Math.sin(timeOfDay01 * Math.PI * 2 - Math.PI / 2))
+                // 日照加热只看太阳高度：正午最强、午夜归零（太阳时间统一走 FogModel.solarFactor）
+                double solarHeating = 6.0 * Math.max(0, FogModel.solarFactor(timeOfDay01))
                         * (raining ? 0.25 : 1.0);
                 double clearCooling = 2.0 * (raining ? 0.2 : 1.0);
                 double tRelax = Math.min(1.0, dtSeconds / 1200.0);

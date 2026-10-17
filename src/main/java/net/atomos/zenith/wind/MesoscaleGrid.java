@@ -1,5 +1,7 @@
 package net.atomos.zenith.wind;
 
+import net.atomos.zenith.weather.FogModel;
+
 /**
  * L1 中尺度网格，服务端权威：33×33×8 格，水平每格 64 格方块，垂直每层 40 格方块。
  *
@@ -136,8 +138,8 @@ public class MesoscaleGrid {
                     double drag = clamp(L1_TERRAIN_FORM_DRAG * slopeMag * 3.0, 0, 0.6);
                     col.windX[0] *= (1 - drag);
                     col.windZ[0] *= (1 - drag);
-                    // 白天风往坡上爬、晚上往坡下溜（山谷风环流）
-                    double diurnal = Math.sin(timeOfDay01 * Math.PI * 2 - Math.PI / 2);
+                    // 白天风往坡上爬、晚上往坡下溜（山谷风环流）：正午最强上坡风、午夜最强下坡风
+                    double diurnal = FogModel.solarFactor(timeOfDay01);
                     double slopeWind = L1_THERMAL_SLOPE_WIND_MPS * diurnal
                             * clamp01(slopeMag * 4.0);
                     col.windX[0] += slope[0] / slopeMag * slopeWind;

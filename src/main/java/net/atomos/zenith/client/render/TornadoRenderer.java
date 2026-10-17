@@ -1,6 +1,7 @@
 package net.atomos.zenith.client.render;
 
 import com.mojang.blaze3d.systems.RenderSystem;
+import com.mojang.blaze3d.shaders.FogShape;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import net.atomos.zenith.client.ClientWindState;
@@ -216,7 +217,13 @@ public final class TornadoRenderer {
         float dx = x - (float) camPos.x;
         float dy = y - (float) camPos.y;
         float dz = z - (float) camPos.z;
-        float dist = (float) Math.sqrt(dx * dx + dy * dy + dz * dz);
+        // 1.21 地形雾默认圆柱形：水平距离为主、竖向取大，贴着雾本来的形状来
+        float dist;
+        if (RenderSystem.getShaderFogShape() == FogShape.CYLINDER) {
+            dist = Math.max((float) Math.hypot(dx, dz), Math.abs(dy));
+        } else {
+            dist = (float) Math.sqrt(dx * dx + dy * dy + dz * dz);
+        }
         float fogStart = RenderSystem.getShaderFogStart();
         float fogEnd = RenderSystem.getShaderFogEnd();
         float span = fogEnd - fogStart;

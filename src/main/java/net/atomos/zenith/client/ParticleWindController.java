@@ -5,6 +5,7 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
 import net.minecraft.tags.BiomeTags;
+import net.minecraft.tags.FluidTags;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.CampfireBlock;
 import net.minecraft.world.level.block.state.BlockState;
@@ -80,13 +81,24 @@ public final class ParticleWindController {
             }
         }
 
-        // 水沫：风暴/台风；溅射初速 0.1~0.2 block/tick（2~4 m/s），剩下的交给重力+终端速度
+        // 水沫：风暴/台风天，只在水面附近溅起来；溅射初速 0.1~0.2 block/tick（2~4 m/s）
         if (stormBoost > 0.45 && tickCounter % 4 == 0) {
             for (int i = 0; i < 3; i++) {
                 double x = px + (RANDOM.nextDouble() - 0.5) * 30;
                 double z = pz + (RANDOM.nextDouble() - 0.5) * 30;
-                double y = py + RANDOM.nextDouble() * 6;
-                level.addParticle(ZenithParticles.SPRAY.get(), x, y, z,
+                // 从玩家脚下往下找水面：离水面超过 8 格就别硬溅了（岸上/悬崖上不溅）
+                BlockPos bp = BlockPos.containing(x, py, z);
+                int waterY = Integer.MIN_VALUE;
+                for (int d = 0; d < 8; d++) {
+                    BlockPos p = bp.below(d);
+                    if (level.getFluidState(p).is(FluidTags.WATER)) {
+                        waterY = p.getY();
+                        break;
+                    }
+                }
+                if (waterY == Integer.MIN_VALUE) continue;
+                // 水面 +0.1 格出生，省得生在水里
+                level.addParticle(ZenithParticles.SPRAY.get(), x, waterY + 1.1, z,
                         (RANDOM.nextDouble() - 0.5) * 2, 0.1 + RANDOM.nextDouble() * 0.1,
                         (RANDOM.nextDouble() - 0.5) * 2);
             }

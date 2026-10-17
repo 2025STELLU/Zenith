@@ -2,10 +2,13 @@ package net.atomos.zenith.client;
 
 import net.atomos.zenith.sound.ZenithSounds;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.resources.sounds.AbstractTickableSoundInstance;
 import net.minecraft.client.resources.sounds.SoundInstance;
+import net.minecraft.core.BlockPos;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.util.RandomSource;
+import net.minecraft.world.level.levelgen.Heightmap;
 
 /**
  * 客户端风声管理器：随玩家处风速实时调制环境风声循环的音量/音高。
@@ -82,10 +85,10 @@ public final class WindSoundManager {
                 var base = p.blockPosition();
                 int open = 0;
                 if (mc.level.canSeeSky(base)) open++;
-                if (mc.level.canSeeSky(base.offset(8, 0, 0))) open++;
-                if (mc.level.canSeeSky(base.offset(-8, 0, 0))) open++;
-                if (mc.level.canSeeSky(base.offset(0, 0, 8))) open++;
-                if (mc.level.canSeeSky(base.offset(0, 0, -8))) open++;
+                if (skyOpenAt(mc.level, base, 8, 0)) open++;
+                if (skyOpenAt(mc.level, base, -8, 0)) open++;
+                if (skyOpenAt(mc.level, base, 0, 8)) open++;
+                if (skyOpenAt(mc.level, base, 0, -8)) open++;
                 skyExposure += (open / 5.0f - skyExposure) * 0.1f;
             }
             // 1.5 m/s 以下几乎无声，18 m/s 满音量；室内再打折
@@ -95,6 +98,13 @@ public final class WindSoundManager {
             this.volume += (audible - this.volume) * 0.08f;
             this.pitch = (float) (0.82 + speed * 0.014);
             if (this.pitch > 1.25f) this.pitch = 1.25f;
+        }
+        /** 偏移点的天空采样：高度取玩家脚高与该点地表上方的大者，别钻进山坡里被判室内。 */
+        private static boolean skyOpenAt(ClientLevel level, BlockPos base, int dx, int dz) {
+            int x = base.getX() + dx, z = base.getZ() + dz;
+            int y = Math.max(base.getY(),
+                    level.getHeight(Heightmap.Types.WORLD_SURFACE, x, z) + 1);
+            return level.canSeeSky(new BlockPos(x, y, z));
         }
     }
 }

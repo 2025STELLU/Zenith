@@ -8,6 +8,7 @@ import net.minecraft.client.renderer.RenderType;
 import net.minecraft.client.renderer.entity.EntityRenderer;
 import net.minecraft.client.renderer.entity.EntityRendererProvider;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.util.Mth;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
@@ -23,6 +24,13 @@ public class SailboatRenderer extends EntityRenderer<SailboatEntity> {
                        MultiBufferSource buffers, int light) {
         pose.pushPose();
         pose.mulPose(com.mojang.math.Axis.YP.rotationDegrees(180 - yaw));
+        // 受击晃动：照原版 BoatRenderer，绕船体 X 轴滚一下，幅度随受伤时间衰减
+        float hurt = boat.getHurtTime() - partialTick;
+        float dmg = Math.max(boat.getDamage() - partialTick, 0f);
+        if (hurt > 0) {
+            pose.mulPose(com.mojang.math.Axis.XP.rotationDegrees(
+                    Mth.sin(hurt) * hurt * dmg / 10f * boat.getHurtDir()));
+        }
         VertexConsumer vc = buffers.getBuffer(ClientRenderHelper.FLAT_COLOR);
 
         // 船体

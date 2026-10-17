@@ -39,7 +39,8 @@ public class SeaBreezeSystem implements WeatherPhenomenon {
         focusX = anchor.getX();
         focusZ = anchor.getZ();
 
-        double solar = Math.sin(ctx.timeOfDay01() * Math.PI * 2.0 - Math.PI / 2.0);
+        // 海陆风随太阳走：正午海风最强、午夜陆风最强（太阳时间统一走 FogModel.solarFactor）
+        double solar = FogModel.solarFactor(ctx.timeOfDay01());
         double dayFactor = clamp01(solar * 1.6);          // 白天强度
         double nightFactor = clamp01(-solar * 1.8);      // 夜间强度
         // 白天海风锋往内陆推，晚上再缩回去

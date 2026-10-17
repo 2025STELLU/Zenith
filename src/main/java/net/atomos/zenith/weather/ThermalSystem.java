@@ -58,9 +58,9 @@ public class ThermalSystem implements WeatherPhenomenon {
 
     @Override
     public void tick(ServerLevel level, double dtSeconds, WeatherContext ctx) {
-        // timeOfDay01 里 0.25=日出、0.5=正午，正弦近似即可
-        double solar = Math.sin(ctx.timeOfDay01() * Math.PI * 2.0 - Math.PI / 2.0);
-        solar = Math.max(0, solar) * (ctx.raining() ? 0.25 : 1.0)
+        // 热泡只在白天长：正午最强、午夜归零（太阳时间统一走 FogModel.solarFactor）
+        double solar = Math.max(0, FogModel.solarFactor(ctx.timeOfDay01()));
+        solar = solar * (ctx.raining() ? 0.25 : 1.0)
                 * ctx.seasonInfo().solarMultiplier();
 
         // 生成

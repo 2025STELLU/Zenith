@@ -54,8 +54,9 @@ public class WindVaneBlock extends Block implements EntityBlock {
     @Override
     public <T extends BlockEntity> BlockEntityTicker<T> getTicker(Level level, BlockState state,
                                                                    BlockEntityType<T> type) {
-        return (lvl, pos, st, be) -> {
+        // 服务端不跑 ticker：yaw 只是客户端渲染用，服务端算了也没人读
+        return level.isClientSide ? (lvl, pos, st, be) -> {
             if (be instanceof WindVaneBlockEntity vane) vane.tick();
-        };
+        } : null;
     }
 }
