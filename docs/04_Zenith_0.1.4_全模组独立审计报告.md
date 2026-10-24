@@ -5,6 +5,8 @@
 > 审计方式：逐文件通读 + 关键公式离线数值复现 + 与 `Workspace/docs/01`–`03`（0.1.4 自述）及 `Hark/01`–`03`（0.1.1 基线）逐条交叉核对 + 构建尝试
 > 审计立场：**只读审计**。未修改任何源码、资源或既有文档。
 > 编号约定：沿用 `SYS / DRV / L0 / L1 / L2 / API / NET / CLI / SAIL / BLK / ENG`；天气现象统一为 `WX-<系统>-<序号>`，旧天气编号（TH/SB/SC/TY/FR/SQ/DD/MW/MS）作为历史别名保留；新横切问题顺延到本家族下一个可用编号。
+>
+> **0.1.5-alpha 修复状态**：本报告所列 122 条现存问题中，**121 条已关闭、1 条部分关闭**（`L2-02`）。逐条做法、报告口径纠错、实施者自行决定项与验证结果见 **[§18 修复记录](#18-修复记录015-alpha)**。下列 §2–§13 正文保留审计时的原始判断与"（未修）"标记，未作改写。
 
 ---
 
@@ -84,6 +86,8 @@
 | **合计** | **122** | **18** |
 
 **计数口径**：只统计仍以 `###/####` 标题登记为"现存/部分修"的条目；已关闭的 14 条以单独标题列出（`CLI-01/02/03/04/05/06/08/11`、`BLK-01/02/05/06`、`CMD-01`、`ENG-02`），不重复计入。全库标题总数 `122 + 14 = 136`。
+
+> 0.1.5-alpha 修复后的状态：122 条中 **121 条关闭、1 条部分关闭**（`L2-02`）。本节统计是审计时（0.1.4-alpha）的快照，未按修复结果回填；逐条结果见 §18。
 
 **与 0.1.1 台账（`Hark/01`）的关系**：
 
@@ -2711,6 +2715,417 @@ BUILD FAILED in 2m 42s
 
 ---
 
+## 18. 修复记录（0.1.5-alpha）
+
+本节记录针对本报告 §2–§13 所列 **122 条现存问题**的修复实施结果，以及实施过程中发现的**报告自身口径错误**、**必须由实施者自行决定的设计选择**、**逐条复核中新发现的 8 条"此前未真正修完"**，和**1 条只做到部分的修复**。
+
+> 版本：`mod_version = 0.1.5-alpha`（`Workspace/gradle.properties`）。
+> 原则：每条修复独立成批提交，便于逐条回滚；未改动 `Hark/01`–`03`。
+
+### 18.1 提交链
+
+| 提交 | 内容 | 文件 | 增/删 |
+|------|------|------|-------|
+| `e7148c3` | 基线（0.1.4-alpha 原样） | 186 | +14,886 |
+| `7fd3f2e` | Wave 1：SYS-12/13、WX-SB-04、SAIL-09、NET-07、API-03、WX-FR-01、ENG-01/07、版本号 | 11 | +133 / −29 |
+| `3b92ee6` | Wave 2：L1-01、L2-01（两个 P0） | 3 | +284 / −62 |
+| `1b898cd` | Wave 3：SYS-01、L0-01、DRV-05..08、WX-TY-01..05 | 7 | +236 / −53 |
+| `b0afdc9` | Wave 4：热泡/海风/尘卷/飑线/雷暴物理 + ENG-03 配置 + 闪电闸门 + 冰雹伤害源 | 15 | +987 / −185 |
+| `9eb25a8` | Wave 5：SAIL-02..10 | 4 | +248 / −65 |
+| `1967813` | 审计报告归档到 `docs/` | 5 | +11 / −1 |
+| `601ef96` | Wave 6：环面折返、逐点龙卷、确定性随机源、持久化、季风偏置、风道接力 | 29 | +1,614 / −225 |
+| `01ce7d9` | Wave 7：L0/L1/L2/RT/API/NET 口径、采样分层、粗场协议 | 7 | +957 / −247 |
+| `7c00e17` | Wave 8：API 补全（版本/事件/翼型/层位）+ 热源索引 + 粗场增量 | 21 | +1,085 / −123 |
+| `187cdf4` | Wave 9：山地波压缩、平流雾模型、原版降雨回写、台风 L0 足迹 | 7 | +503 / −38 |
+| `436ce87` | Wave 10：CLI-10/12..16、ENG-05/06 | 14 | +629 / −241 |
+| `d620bfc` | Wave 11：ENG-04 JUnit 基线（73 用例）+ 翼型厚度口径 | 12 | +1,202 / −3 |
+| `712f18f` | 锋面热力/气压场 + 锋面挂靠低压中心 | 4 | +261 / −23 |
+| `4ce2d8c` | 涡轮探针滑均、龙卷双 pass 排序、真实光照贴图 | 5 | +258 / −101 |
+| `d2dddd9` | 焦点聚类、仅已加载区块探针、采样线程安全 | 3 | +187 / −22 |
+| `b2572b9` | 雷暴单体半径由环境决定 | 1 | +7 / −1 |
+
+### 18.2 逐条状态
+
+**图例**：`关闭` = 报告所述缺陷已按 §16 修复建议实现并验证；`部分` = 只实现了一部分，残余缺口在备注里写明；`口径纠错` = 报告判断有误，实际缺陷形态与描述不同，已按真实形态修复；`合并` = 与另一条同源，一并修复。
+
+#### 18.2.1 横切系统 SYS（10 条）
+
+| 编号 | 状态 | 提交 | 做法 |
+|------|------|------|------|
+| SYS-01 | 关闭 | `1b898cd` | 新增 `wind/HemisphereConvention`（唯一手性来源：`coriolisSign()` / `tangential()` / `inflowAngle()`），地转风、气旋、台风、尘卷、锋面全部改为向它取号；`ZenithConfig.southernHemisphere` 在 `ModConfigEvent.Loading/Reloading` 调 `setHemisphereSign()` |
+| SYS-03 | 关闭 | `1b898cd` `b0afdc9` | 所有现象/网格的高度基准统一为 AGL：`terrainHeightBlocks()` 返回地表顶面 y 作基准；`Thermal`/`SeaBreeze`/`DustDevil`/`Typhoon`/`SquallLine`/`StormCell` 的 `y-64`、`y-60` 全删 |
+| SYS-05 | 关闭 | `3b92ee6` `1b898cd` `601ef96` | L1 水平双线性（原最近邻）；台风/飑线去掉半径硬截断改 `outerTaper()`（smoothstep 0.75R..R）；L0 气旋/对流团/龙卷足迹统一 `wrapDelta(delta, period)` 环面折返 |
+| SYS-06 | 关闭 | `d2dddd9` | 焦点改单遍聚类（`FOCUS_CLUSTER_RADIUS_BLOCKS=256`）取人数最多簇质心并吸附 64 格 L1 瓦片；`SeaBreezeSystem` 新增 `fieldFocusX/Z` 建场锚点，采样只认它；修掉建场用 `GRID/2`(16)、采样用 `GRID/2.0`(16.5) 造成的 32 格系统偏移（新增 `CENTER_INDEX`） |
+| SYS-08 | 关闭 | `601ef96` | 新增 `weather/ZenithRandom`（SplitMix64，`long` 状态可序列化）替换 8 个现象系统里的 `java.util.Random`；`WeatherPhenomenon` 增加 `saveKey()/save()/load()`，新增 `wind/ZenithWeatherSavedData`（`SavedData`，`DATA_NAME="zenith_weather"`），落盘挂 `ServerStoppingEvent` |
+| SYS-09 | 关闭 | `b0afdc9` | `weatherEnabled(level)`：主世界恒 true；下界/末地取 `weatherInNether`/`weatherInEnd`（默认 false）；模组维度按 `hasSkyLight() && !hasCeiling()`。门控只跳过现象 tick / 热源扫描 / 现象采样，L0/L1 仍推进 |
+| SYS-10 | 关闭 | `d2dddd9` | `StormCellSystem.hasRoofBetween` 加 `level.hasChunkAt()` 前置；`stateFor` 的 L2 障碍探针与地面探针改走 `terrainAdapter.chunkIfLoaded`；`HeatCache` 与 `LightningGate` 用 `getChunk(...,FULL,false)`。未加载一律当"无障碍" |
+| SYS-11 | 关闭 | `d2dddd9` | `dimensions` 改 `ConcurrentHashMap`；`DimensionState.samplingLock`（`ReentrantLock`）同时包住 `sampleInternal→sampleLocked` 与 `tickDimension` 的 L1 刷新；`sampleInternal` 加 `assert server.isSameThread()`；新增 `l1LastRefreshTick` + `FRESHNESS_DECAY_TICKS=256` 让 `confidence` 随数据年龄衰减到最差 0.75× |
+| SYS-12 | 关闭 | `7fd3f2e` | `isOceanAt`/`surfaceAt` 由 `getHeight(...)`（= 最高非空气方块**之上**）改 `h-1` 取真实地表方块 |
+| SYS-13 | 关闭 | `7fd3f2e` | 群系采样 y 由写死 64 改为该列真实地表方块 y |
+
+#### 18.2.2 驱动器 DRV（7 条）
+
+| 编号 | 状态 | 提交 | 做法 |
+|------|------|------|------|
+| DRV-01 | 关闭 | `601ef96` | 统一 `wrapDelta(delta, period)`；`advance` 末尾 `wrapCell` 折回 `[0,384)` |
+| DRV-02 | 关闭 | `601ef96` | `ConvectiveCluster.hostIndex` 固定宿主，不再 `orbitAngle % size`；对流团不再每 ~100 s 跳到另一个格 |
+| DRV-03 | 关闭 | `601ef96` | 新建 `weather/TornadoSystem`，龙卷改为逐点 `WeatherPhenomenon`（Burgers–Rott，`TANGENTIAL_PEAK=0.6382`，`outerTaper` 0.7R→R，`HEIGHT_SCALE_BLOCKS=300`，`FUNNEL_TOP_AGL=1200`，核心上升 `0.35·vt`）；`WorldScaleDriver` 删 `TornadoVortex`，只留 L0 足迹 `reportTornadoFootprint`（高斯 σ=1500 格，气压 −90 Pa），`Sample.tornadoWindX/Z` 恒 0（字段保留兼容） |
+| DRV-05 | 关闭 | `1b898cd` | 删 `CycloneCell.spin`/`inflowSign`，旋向与辐合改由 `HemisphereConvention.coriolisSign()` + `lowPressure` 派生 |
+| DRV-06 | 关闭 | `1b898cd` | `u`/`w` 按矢量模长钳制，不再逐分量独立钳制（逐分量会把风向掰向对角线） |
+| DRV-07 | 关闭 | `1b898cd` | `synopticLull` 由独立随机游走改 OU 过程（有回归速度，时间尺度确定） |
+| DRV-08 | 关闭 | `1b898cd` | 低压径向分量符号改正：低压辐合、高压辐散 |
+
+#### 18.2.3 L0 BackgroundMetGrid（9 条）
+
+| 编号 | 状态 | 提交 | 做法 |
+|------|------|------|------|
+| L0-01 | 关闭 | `1b898cd` | 地转风 `(-∂p/∂z, ∂p/∂x)` 修正为 `coriolisSign()` 决定的手性 |
+| L0-02 | 关闭 | `01ce7d9` | `setFocus` 改为对齐到 `CELL_SIZE_BLOCKS` 网格 + 真实数组平移（`CellState`/`prev`/`coldStart` 三张表一起搬），焦点不再与地理脱钩 |
+| L0-03 | 关闭 | `01ce7d9` | 松弛/扩散/气压混合系数改为 `1-exp(-dt/τ)`（`BackgroundMetGrid:351`），`/tick rate` 与睡眠跳变不再破坏稳定性 |
+| L0-04 | 关闭 | `01ce7d9` | 地形形阻先缓存入射风速再分两次施加（原代码第二次用的是已被改过的模长，衰减量随 `gx` 符号不对称） |
+| L0-05 | 关闭 | `01ce7d9` | 群系温度映射改按真实地表 y 与纬度，标定区间 255..310 K（`BIOME_TEMP_MIN/MAX_INPUT` 线性映射）；递减率改 AGL |
+| L0-06 | 关闭 | `01ce7d9` | L0 不再做地面粗糙度衰减（近地摩擦全部由 L1 对数廓线负责），消除"同一份摩擦算两遍"导致的稳态只剩 64% |
+| L0-07 | 关闭 | `01ce7d9` | 气压异常经 `Sample.pressureAnomalyPa` 进 API（`API-07` 的数据源） |
+| L0-08 | 关闭 | `01ce7d9` | 每格刷新改为复用 scratch 对象，稳态零分配 |
+| L0-09 | 关闭 | `01ce7d9` | 对流/龙卷的热量与湿量接入 `CellColumn`（`convMoist`/`torMoist`、温度偏置），不再是死数据 |
+
+#### 18.2.4 L1 MesoscaleGrid（6 条）
+
+| 编号 | 状态 | 提交 | 做法 |
+|------|------|------|------|
+| L1-01 | **口径纠错** | `3b92ee6` | 见 §18.3.1：层改纯 AGL，垂直 AGL 线性 + 水平双线性，去掉 `0.15` 地板改纯对数律 |
+| L1-02 | 关闭 | `01ce7d9` | 水平最近邻改双线性；域外按出界距离在 `OUTSIDE_FADE_BLOCKS=512` 内淡到 L0（不再硬夹边缘值） |
+| L1-03 | 关闭 | `01ce7d9` | "切变"改为真正的垂直风切变（`SHEAR_HIGH_LAYER`=300 AGL 与 `SHEAR_LOW_LAYER` 的矢量差 / `dzBulk`），另设 `SHEAR_VERTICAL_LAYER`=14 AGL 给 `duDz`；不再报法向应变 |
+| L1-04 | 关闭 | `01ce7d9` | Ekman 螺旋的"地面风"改由 L0 的 AGL 廓线给出，不再把 L0 首层当地面 |
+| L1-05 | 关闭 | `01ce7d9` | 阵风改为冻结湍流（Taylor 假设）：`x'=(x−U·t)/L`，`gustPhaseX/Z` 逐 tick 累积；纵向 + 横向各一分量；幅度用**本次**`turbulenceIntensity` |
+| L1-06 | 关闭 | `01ce7d9` | 强迫按 `CONTINUITY_COUPLING=0.5`、`MAX_CONTINUITY_W_MPS=3.0` 分布到整柱（不再只加第 0 层）；气压异常随层输出 |
+
+#### 18.2.5 L2 LocalFlowSolver（5 条）
+
+| 编号 | 状态 | 提交 | 做法 |
+|------|------|------|------|
+| L2-01 | 关闭 | `3b92ee6` | 地面不再当障碍物（判据改 `sy <= groundY` 跳过 + 5×5 地面最小值），平地不再有伪上升 |
+| L2-02 | **部分** | `01ce7d9` | 见下方说明 |
+| L2-03 | 关闭 | `7c00e17` | 新增 `wind/HeatCache`：按 `16³` 段归并 + `LevelChunkSection.maybeHas` 预筛 + 玩家分桶（±32 格 / 下 32 上 40 / 200 tick 重扫）+ 单次返回最近 128 个 |
+| L2-04 | 合并 → `BLK-07` | `601ef96` | 见 BLK-07 |
+| L2-05 | 关闭 | `01ce7d9` | `confidence` 由地面探针覆盖率（`0.5+0.5·known/25`）、无地面探针（×0.5）、扫描边缘截断比例共同给出；越界判断改 `y >= maxBuildHeight`（开区间上界） |
+
+**L2-02 的残余缺口（必须知悉）**：报告建议三件事，本轮只做了第一件。
+
+1. ✅ **`SamplePolicy` 真正生效**：`sampleLocked` 里 `policy != SERVER_COARSE_ONLY` 才跑现象层与 L2；`SERVER_COARSE_ONLY` 的调用方（最便宜的语义）不再付 729 次方块查询。
+2. ❌ **L2 结果缓存 / 活跃区块体素网格（异步构建）**：没做。`LocalFlowSolver.solve()` 仍然每次 `new LocalFlow(...)`，同一点在相邻 tick 被重复求解。
+3. ❌ **`sampleGameplay` 的 `quality` 参数**：没做。现在只有 `SamplePolicy` 这个既有枚举，没有额外的质量档位。
+
+之所以没做 2 和 3：异步体素网格要引入跨 tick 的构建任务队列与"构建完成前返回什么"的语义，属于架构级改动；在没有实际性能测量的情况下贸然加缓存，很容易用"过期数据"换 TPS。**这是本轮唯一一条没有完整闭合的问题。**
+
+#### 18.2.6 天气现象 WX（36 条）
+
+| 编号 | 状态 | 提交 | 做法 |
+|------|------|------|------|
+| WX-TH-01 | 关闭 | `b0afdc9` | 删 `groundY=60`，改真实地表 y（并在漂移时更新） |
+| WX-TH-02 | 关闭 | `b0afdc9` | `SINK_PEAK_PER_UPDRAFT = 0.31390`，环带 `R..2.2R`，形状 `g(t)=t(1-t)³/0.10546875`（峰在 `t=0.25` 即 `r=1.3R`），上升/下沉通量比 = 1.00000 |
+| WX-TH-03 | 关闭 | `b0afdc9` | 漂移改用 `ctx.terrain().heightAt()`（真实地形），不再用种子地形 |
+| WX-TH-04 | 关闭 | `b0afdc9` | `heightAgl = clamp(updraftMps*25, 40, min(200, ablHeight))` |
+| WX-TH-05 | 关闭 | `b0afdc9` | `Thermal` 新增 `spawnSolar`/`solarFactor`，`solarDecay() = clamp(solarFactor/spawnSolar, 0, 1)`，夜间衰减 |
+| WX-SB-01 | 关闭 | `b0afdc9` | 锚点由 `players.get(0)` 改全体玩家质心；域外返回 0 |
+| WX-SB-02 | 关闭 | `b0afdc9` | 8 方向 × 32 格量化改倒角距离变换（chamfer 1:√2）+ `∇D` 求岸线法向 |
+| WX-SB-03 | 关闭 | `b0afdc9` | 随 `SYS-12` 一起修（`h-1` 取地表方块）后 `isOceanAt` 恢复有效 |
+| WX-SB-04 | 关闭 | `7fd3f2e` | 批量读高度图 + 距离场缓存，`REFRESH_TICKS=100`，不再上万次逐点 `getBlockState` |
+| WX-SB-05 | 关闭 | `b0afdc9` | AGL 改 `y - 该格点真实地表 y`（`groundY[][]` 双线性插值） |
+| WX-SB-06 | 关闭 | `b0afdc9` | `MAX_INLAND_DISTANCE=480`、`SATURATED_DISTANCE=1e6`、注释与代码统一 |
+| WX-SC-01 | 关闭 | `b0afdc9` | 新增 `ZenithDamageTypes.HAIL` + `data/zenith/damage_type/hail.json`；伤害 0.5/2 s；加 `level.isRaining()` 与 `hasRoofBetween()`（2–40 格实心遮挡） |
+| WX-SC-02 | 关闭 | `b0afdc9` | 新增 `weather/LightningGate` 四道闸：区块已加载、`hasSkyLight() && !hasCeiling()`、配置 `lightningSetsFire`/`lightningDamage`（默认 true）、离玩家 `lightningMaxDistanceFromPlayer=160` |
+| WX-SC-03 | 关闭 | `b0afdc9` | 雷暴风场补高度结构：`agl = max(0, y - c.groundY)`，低层入流 `exp(-agl/...)` + 中层外流 |
+| WX-SC-04 | 关闭 | `187cdf4` | 新增 `weather/WeatherCycleBridge`（`REEVALUATE_TICKS=20`），按 `RAIN_PRECIP_THRESHOLD=0.15` / `THUNDER_PRECIP_THRESHOLD=0.45` / `THUNDER_TURBULENCE_THRESHOLD=0.35` 调 `ServerLevel.setWeatherParameters(0, RAIN_HOLD_TICKS=600, true, wantThunder)`；`ownRain = holdUntilTick > now`；风暴离开时 `STOP_LINGER_TICKS=0` 收雨；配置开关 `weatherOverridesVanillaRain` |
+| WX-SC-05 | 关闭 | `b0afdc9` `b2572b9` | 移速跟引导气流（`moveX/moveZ = l1.windX/Z * 0.6`）；半径改由环境决定，见 §18.3.6 |
+| WX-TY-01 | 关闭 | `1b898cd` | 旋向由 `HemisphereConvention.coriolisSign()` 决定（台风恒为低压，所以是 `coriolisSign × 1`） |
+| WX-TY-02 | 关闭 | `1b898cd` | 删半径硬截断，新增 `outerTaper()`（smoothstep 0.75R..R） |
+| WX-TY-03 | 关闭 | `1b898cd` | 删眼区 `continue`；`eyeDampening` 不再乘总风（只作用于切向分量在眼内的插值） |
+| WX-TY-04 | 关闭 | `1b898cd` | Rankine → Holland（`HOLLAND_B=1.5`）；入流角 `5° + 20°·exp(-(r-Rmax)²/(2Rmax²))` |
+| WX-TY-05 | 关闭 | `1b898cd` | 高度衰减改 AGL；登陆衰减时眼墙四点任一仍在海上则时间常数取 `43200 s`（12 h），否则 `21600 s` |
+| WX-TY-06 | 关闭 | `187cdf4` | `WorldScaleDriver` 新增 `ExternalVortex` 接口；`Typhoon implements ExternalVortex`；`sample()` 末尾按高斯足迹（`TYPHOON_L0_SIGMA_FRACTION=0.40`）写 `pressure`（上限 `TYPHOON_L0_MAX_PRESSURE_PA=1350`）、`tempBias`（`TYPHOON_L0_MAX_WARM_CORE_K=1.8`）、`humidity`（`TYPHOON_L0_MAX_MOISTURE=0.35`），**不写风** |
+| WX-TY-07 | 关闭 | `1b898cd` `601ef96` | 命名/旋向受半球控制；`nameCounter` 随 `SYS-08` 持久化 |
+| WX-FR-01 | 关闭 | `7fd3f2e` | 生成时设定的强度不再被下一 tick 的 `stormAct` 覆盖（只在未初始化时赋初值） |
+| WX-FR-02 | 关闭 | `712f18f` | `WindContribution` 扩为 7 字段 `record(vx,vy,vz,turbulenceAdd,precipIntensity01,tempDeltaK,pressureDeltaPa)`（保留 5 参构造）；`FrontSystem.signedDistanceTo()` + 冷锋锋后 −4.0 K/+300 Pa、暖锋锋前 +2.5 K/−200 Pa，`smoothstep` 只作用于半平面，末端叠加到 `airTemperatureKelvin`/`pressureAnomalyPa` |
+| WX-FRONT-01 | 关闭 | `712f18f` | 锋面不再在玩家周围随机圆环生成：`WorldScaleDriver.nearestLowPressureCenter()` 给出环面最近低压中心，冷锋 −n / 暖锋 +n 偏移 `0.45·coreRadius`，锋线倾斜 `15°`（半球镜像），长度 `clamp(outerRadius·0.10, 250, 600)`，走向取 `heightAt+120` 的引导气流 |
+| WX-SQ-01 | 关闭 | `b0afdc9` | 阵风加 `exp(-agl/300)`、`wy = 0.35·gust·exp(-agl/500)`；线后冷池出流 `10 m/s·exp(-rear/60)`（`COLD_POOL_REAR_RANGE=120`） |
+| WX-SQ-02 | 关闭 | `b0afdc9` | 走 `LightningGate`；闪电沿锋线 `x1..x2` 取点，不再以 `c.x/c.z` 画圆 |
+| WX-SQ-03 | 关闭 | `b0afdc9` | 微下击暴流与单体耦合：成熟期按 `stormActivity` 概率生成，寿命 60–180 s，半径 20–50 格，上部下沉 + 触地后外流，`MAX_MICROBURSTS_PER_LINE=6` |
+| WX-DD-01 | 关闭 | `b0afdc9` | `TANGENTIAL_PEAK=0.6382`，`tangentialProfile(r)` 峰值归一化 = 1；核心也转（不再只有上升） |
+| WX-DD-02 | 关闭 | `b0afdc9` | 高度全 AGL；`groundY` 随尘卷漂移更新 |
+| WX-MW-01 | 关闭 | `187cdf4` | 显式 `WAVE_SCALE_COMPRESSION=0.08`，`λ=clamp(2πU/N·0.08, 40, 400)`（承认 MC 尺度压缩，不再假装是 0.5–7.9 km） |
+| WX-MW-02 | 关闭 | `187cdf4` | 上风向 16 点等距采样（`UPWIND_MAX_BLOCKS=800`）+ 三点抛物线插值细化 `crestDist`/`crestH`，消除相位量化 |
+| WX-MW-03 | **口径纠错** | `7fd3f2e` | 见 §18.3.2：判定为随 `SYS-12` 一并关闭 |
+| WX-MS-01 | 关闭 | `601ef96` | `MonsoonSystem` 不再 `implements WeatherPhenomenon`，改 33×33 / 256 格偏置场 + `CoastDistance.signedDistanceBlocks` 的 `exp(-|D|/600)` 加权（`REFRESH_TICKS=600`）；`WorldScaleDriver` 新增 `BaseFlowBias`/`setBaseFlowBias()` |
+| WX-FOG-01 | 关闭 | `187cdf4` | 平流雾改 `0.6·smoothstep(rh,0.70,0.95)·smoothstep(wind,1.5,4.5)·(1−smoothstep(wind,6,9))`；三种雾共享 `saturationDeficit(rh, threshold)`；雨雾改 `0.35·saturationDeficit(rh,0.85)`；`FogModel.smoothstep` 公开为工具函数 |
+
+#### 18.2.7 运行时 RT（5 条）
+
+| 编号 | 状态 | 提交 | 做法 |
+|------|------|------|------|
+| RT-01 | 关闭 | `01ce7d9` `7c00e17` | 采样结果新增 `Source.PHENOMENA`/`COMPOSITE` 与 `layers()` 位标记（`LAYER_L0/L1/PHENOMENA/L2`），客户端不再把 L1 当全部 |
+| RT-02 | 关闭 | `7c00e17` | 见 `L2-03`（`wind/HeatCache`） |
+| RT-03 | 关闭 | `01ce7d9` | `dt` 由真实 tick 间隔推出（`(now-lastTickNanos)/1e9`）；识别睡眠/时间跳变（`lastDayTime`）并补子步（`pendingL0Substeps`，`l0Dt = accumulated/substeps`） |
+| RT-04 | 关闭 | `7c00e17` | `CoarseWindPacket` 增增量帧（以 `coarseBase` 为基准、`DIRTY_EPSILON_MPS=0.1`、`FULL_RESEND_FRACTION=0.6`）；新玩家补一帧当前全量帧 |
+| RT-05 | 关闭 | `01ce7d9` | 维度查找由 `toString().equals()` 线性遍历改 `ResourceKey` 直查 |
+
+#### 18.2.8 公开 API（10 条）
+
+| 编号 | 状态 | 提交 | 做法 |
+|------|------|------|------|
+| API-01 | 关闭 | `01ce7d9` | `SamplePolicy` 真正生效：决定是否跑现象层与 L2（`SERVER_COARSE_ONLY` 全砍）、`source`、`layers()` 位与 `confidence` |
+| API-02 | 关闭 | `01ce7d9` | `runL2()` 恒返回 `ZenithL2Result.unsupported()`；旧实现返回 `of(zero)`（`supported=true`，力=0 N），与"这里真没风"无法区分 |
+| API-03 | 关闭 | `7fd3f2e` | `runPolar()` 六个物理缺陷（`CL` 符号、失速后、`Re` 依赖、力矩参考点、`Cd0` 合成、压缩性）逐项修正 |
+| API-04 | 关闭 | `01ce7d9` | 地形 API 单一入口：`sample(ZenithWorldRef, ZenithBlockPos)` 直转 `sampleTerrain`，不再恒返 `unknown` |
+| API-05 | 关闭 | `7c00e17` | 新增 `ZenithApiVersion`（`0.1`→`0.2`）、`ZenithWeatherEvent(s)` 事件与批量接口 |
+| API-06 | 关闭 | `01ce7d9` | 客户端 `Level` 先走 `ClientBridge`，纯客户端不再落到服务端 runtime 拿空样本 |
+| API-07 | 关闭 | `01ce7d9` | `pressureAnomalyPa` 接 L0 真实值；`humidity01` 由单点改场双线性插值 |
+| API-09 | 关闭 | `7c00e17` | `ZenithAirfoilJson` 改 `Gson`（`JsonParser.parseString`）+ 显式校验（坏 JSON 抛 `IllegalArgumentException` 而非静默 0） |
+| API-10 | 关闭 | `7c00e17` `d620bfc` | NACA 生成器上下表面不再对调，前/后缘去重；`maxThickness()` 改为按上下表面对应站位求差（实测 0012 = 0.120010、2412 = 0.119970、4412 = 0.119850） |
+| API-11 | 关闭 | `7c00e17` | `hasFlow()` 改判矢量模长；`isTrustedForGameplay()` 不再依赖 `hasFlow()`；`Source`/`Authority`/`layers()` 组合语义补全 |
+
+#### 18.2.9 网络 NET（5 条）
+
+| 编号 | 状态 | 提交 | 做法 |
+|------|------|------|------|
+| NET-01 | 关闭 | `01ce7d9` | 粗风场半径取 ±384 格（`DEFAULT_RADIUS_CELLS`），与气象图范围对齐 |
+| NET-03 | 关闭 | `01ce7d9` `7c00e17` | 包内带维度标识，客户端按 `pkt.dimension()` 与当前 `level.dimension()` 比对后丢弃，不再靠 `LoggingIn` 猜 |
+| NET-05 | 关闭 | `01ce7d9` | `FLOAT_ARRAY_CODEC` 加长度上限（防构造 OOM） |
+| NET-06 | 关闭 | `01ce7d9` | 风速改 `short` 定点传输：`FIXED_POINT_MPS=0.01`，量程 ±327.67 m/s（远超任何天气）；每包从 ~1.0 KB 降到 ~0.5 KB |
+| NET-07 | 关闭 | `7fd3f2e` | `WeatherSnapshotPacket` 校验：`cellSizeBlocks>0`、`radiusCells` 合法范围、`listOf` 上限 |
+
+#### 18.2.10 客户端 CLI（16 条，其中 8 条此前已关闭）
+
+| 编号 | 状态 | 提交 | 做法 |
+|------|------|------|------|
+| CLI-01..06、08、11 | 已关闭（基线） | — | 报告已确认关闭，本轮未改动 |
+| CLI-07 | 关闭 | `4ce2d8c` | 拆背面/正面双 pass，两趟之间 `endBatch`；quad 按相机空间深度插入排序，正/背面用外法线与"quad→相机"点积判定；`buildFunnelMesh` 增 `camX/camY/camZ` |
+| CLI-09 | 关闭 | `4ce2d8c` | `FLAT_COLOR`/`FLAT_TRANSLUCENT` 改 `DefaultVertexFormat.POSITION_COLOR_LIGHTMAP` + `POSITION_COLOR_LIGHTMAP_SHADER` + `RenderStateShard.LIGHTMAP`；顶点 `setUv2(light&0xFFFF, (light>>16)&0xFFFF)`；`FULL_BRIGHT` 只留调试几何；船/风向标用管线传入的 `light`，龙卷用底部 `packedLightAt` |
+| CLI-10 | 关闭 | `436ce87` | 气象图范围跟随 `CoarseWindPacket` 半径，8 档滚轮缩放 `{384,256,192,128,96,64,48,32}`；emoji 换 ASCII 字母 + 颜色（T/S/*/!/d）；`GRID` 11×11；采样标注"L1 近地面 AGL 10 m"；`tornadoes()` 逐个画图标；Liang–Barsky 裁剪 + 比例尺 |
+| CLI-12 | 关闭 | `436ce87` | 三个客户端控制器删 `static final Random`/`static int tickCounter`，改 `ClientWindState.tickCounter()/advanceTick()/resetTickCounter()`；随机源改 `level.random`；`(int)` 截断改 `BlockPos.containing` |
+| CLI-13 | 关闭 | `436ce87` | 改 `getRainLevel(1.0) > 0.10` + 玩家头顶露天判定（`Heightmap.MOTION_BLOCKING`）；`stormBoost` 下沉到 `ClientWindState.stormBoostAt(x,z)`（`STORM_INFLUENCE_BLOCKS=400`） |
+| CLI-14 | 关闭 | `436ce87` | `TornadoRenderer` 三档 LOD（≤64 格 20×32 / ≤128 格 12×20 / ≤256 格 8×12）；`FogParams` 每帧只取一次；去 `@EventBusSubscriber`，改在 `ZenithClientSetup.clientSetup` 里 `NeoForge.EVENT_BUS.addListener` |
+| CLI-15 | 关闭 | `436ce87` | `ZenithVisualizer` 改 `count = clamp(1, 12, (int) speed)`，阈值共用 `ParticleWindController.WIND_PARTICLE_THRESHOLD_MPS = 3.0`，采样盒压到 `48×8×48`，随机源改 `level.random` |
+| CLI-16 | 关闭 | `436ce87` | `ParticleMixin` 白名单扩到 `FlameParticle`/`SmokeParticle`/`LavaParticle`/`AshParticle`/`WhiteAshParticle`/`SnowflakeParticle`，显式排除 `CampfireSmokeParticle` |
+
+#### 18.2.11 玩法 SAIL / BLK / CMD（19 条，其中 6 条此前已关闭）
+
+| 编号 | 状态 | 提交 | 做法 |
+|------|------|------|------|
+| SAIL-02 | 关闭 | `9eb25a8` | `headingRadians ≡ MC yaw`；前向 `(-sin h, cos h)`；渲染器改 `-yaw`（删 `180-yaw`） |
+| SAIL-03 | 关闭 | `9eb25a8` | 改 `move(MoverType.SELF, …)` 单次位移 + 被挡部分速度回写 + 软浮力 `vy=clamp(yErr*0.35,±0.25)` + 搁浅保护（`hypot(vel)<0.5` 且 `yErr>0.05` 且下方有碰撞时给微小向上辅助） |
+| SAIL-04 | 关闭 | `9eb25a8` | `LATERAL_RESISTANCE_K=600`、`HULL_MASS_KG=800`，衰减时间常数回到秒级 |
+| SAIL-05 | 关闭 | `9eb25a8` | `driveCoefficient()` 重写：`NO_GO_FADE=0.12`、`0.85·sin(πt)^0.7`、顺风下限 `DOWNWIND_CEILING=0.45`（实测 0/20/30°→0、35°→0.0330、45°→0.3459、90°→0.8207、105°→0.8500、180°→0.4500） |
+| SAIL-06 | 关闭 | `9eb25a8` | `TRIM_RATE_PER_TICK 0.008→0.05` + 客户端 `clientTrimPrediction`；`setPos` 与 `EntityData` 不再双写 |
+| SAIL-07 | 关闭 | `9eb25a8` | 改 `effectiveVelocityVector()`（含阵风）；采样点 `y+1.8` |
+| SAIL-08 | 关闭 | `9eb25a8` | 放置时 `setHeading(radians(getYRot()))`，与 `setYRot` 一致 |
+| SAIL-09 | 关闭 | `7fd3f2e` | 水线公式修正流动水 0.11 格误差；搜索窗 `[-5,+5]`，`FLOAT_DRAFT = 0.30` |
+| SAIL-10 | 关闭 | `9eb25a8` | 放置要求 `FluidState.is(Fluids.WATER)`，命中点先落到水面 |
+| BLK-03 | 合并 → `BLK-07` | `601ef96` | 见 BLK-07 |
+| BLK-04 | 关闭 | `4ce2d8c` | 涡轮探针改读 `meanVelocityVector().horizontalLength()` + 200 tick 滑动平均（`SAMPLE_INTERVAL_TICKS=10`、`FULL_SCALE_MPS=18`）；阵风超 `OVERLOAD_RATIO=1.6` 倍时额外 +1 格作过载指示；不可信时清空历史 |
+| BLK-07 | 关闭 | `601ef96` | 新增 `pipelineVelocityVector()`（mean + localModifier，不含阵风）；风扇串联取沿轴分量 `min(14, max(档位, 上游))`；`LocalFlowSolver.isJetBlocked()` 沿轴 0.5 格步进（`JET_MAX_RAY_BLOCKS=40`） |
+| BLK-08 | 关闭 | `601ef96` | `SPEED_MPS` 私有 + `speedMps(int)`；射流长度 `3.0·speed` 严格正比（12/24/36 格）；`lightLevel(s -> 0)` 空操作删除 |
+| CMD-02 | 关闭 | `601ef96` | `zenith.compass.<n|nne|…>` 16 个 translatable 键；`wind_meter`/`fan_speed` 改 `BigDecimal` 数值格式 + translatable；`zh_cn.json` 括号修复 |
+
+#### 18.2.12 资源与构建 ENG（8 条）
+
+| 编号 | 状态 | 提交 | 做法 |
+|------|------|------|------|
+| ENG-01 | 关闭 | `7fd3f2e` | 见 §18.3.3 |
+| ENG-02 | 已关闭（基线） | — | wrapper jar 已提交 |
+| ENG-03 | 关闭 | `b0afdc9` | 新增 `ZenithConfig`（`ModConfigSpec`，SERVER/CLIENT 两组）；配置项见 §18.3.4；所有读取走 `safe()` 兜底 |
+| ENG-04 | 关闭 | `d620bfc` | `src/test/java` + JUnit 5.11.4 + `neoForge { unitTest { enable() } }`；11 个测试类 80 用例，只覆盖不依赖 MC 运行时的纯函数 |
+| ENG-05 | 关闭 | `436ce87` | `ROOT = Path(__file__).resolve().parent.parent / "src/main/resources/assets/zenith/textures"` |
+| ENG-06 | 关闭 | `436ce87` | 改写四处误导注释（`LocalFlowSolver` 的 LBM 描述、`ZenithServerRuntime.onServerStopped`、`MesoscaleGrid` 迎风坡断言、`SailboatEntity` "原版船就是这么做出来的"） |
+| ENG-07 | 关闭 | `7fd3f2e` | `neoforge.mods.toml` 补 `displayURL`（`issueTrackerURL` 原本已有；`logoFile` 因无美术资源留空） |
+| ENG-08 | 关闭 | `601ef96` | 两语言键值复核一致（43 键、占位符一致、括号配对）；`436ce87` 再复核一遍 |
+
+**合计：136 条标题中 14 条此前已关闭；122 条现存问题里 121 条关闭、1 条部分关闭（`L2-02`，残余缺口见 §18.2.5）。**
+
+### 18.3 报告口径错误、实施者的判断与补充修复
+
+以下 6 处，本报告 §2–§13 的判断与实际代码形态不符、修复建议不可行、或标题与代码行为有偏差。实施时按**真实缺陷形态**修复，并在此如实记录。
+
+#### 18.3.1 L1-01（P0）：报告说"用绝对高度构建、按 AGL 读取"
+
+**报告判断**：层高度 `{2,6,14,30,60,110,190,300}` 被当作绝对 y 构建，而采样按 AGL 读取，所以山顶读的是地面以下。
+
+**实际形态**：层高度确实是 AGL 语义（`LAYER_AGL_BLOCKS`），但实现里有两处真实错误：
+1. 垂直插值把 `hMid = (l+0.5)*LAYER_HEIGHT_BLOCKS` 当 AGL 中心、又减 `col.terrainHeight` 算"离地高度"，两步互相抵消成一团；水平还是最近邻；
+2. 廓线系数写成 `0.15 + 0.85·prof`，即**任何高度都有 15% 的 L0 风**——地面风永远不为零，且 `z0` 用 `0.05 + r·1.5` 让粗糙度失去物理意义。
+
+**最终做法**：
+- 层改纯 AGL `{2,6,14,30,60,110,190,300}`；
+- 垂直 AGL 线性 + 水平双线性；
+- 去掉 `0.15` 地板，改**纯对数律** + `MIN_AGL_BLOCKS=0.3`；
+- `z0` 由 `0.05 + r·1.5` 改 `0.01·200^r`（0.01..2.0 m，随粗糙度指数增长）；
+- Ekman/温度/湿度改 AGL；
+- 坡风 `exp(-AGL/30)`、对流 `exp(-AGL/120)`；
+- 阵风改用**本次** `turbulenceIntensity`（不再用上一帧）。
+
+**观感变化（必须知悉）**：眼高风 **+46%**、10 格风 **+118%**。这是把"永远有 15% 底风"换成真实对数律的必然结果。实测平地 y=64、L0 基流 3.2022 m/s：AGL 1.62 → 0.4078×、10 → 0.6054×、300 → 1.0000×；`turnNear=-29.58°`、`turnTop=0.001°`。
+
+#### 18.3.2 WX-MW-03（P2）：报告说"`terrain` 来自 `SeedTerrainProvider`，不是真实地形"
+
+**实际形态**：`WeatherContext.terrain` 的类型是 `SeedTerrainProvider` 接口，但运行时注入的实现是 `McTerrainAdapter`——它优先读真实区块，未加载才回退哈希地形。报告只看了接口类型就下结论。
+
+**真实缺陷**：`McTerrainAdapter.heightAt()` 的返回值语义（"地表顶面 y"还是"地表方块 y"）在 `isOceanAt`/`surfaceAt` 里用错了（即 `SYS-12`）。
+
+**最终做法**：`SYS-12` 修复后本条一并关闭，`MountainWaveSystem` 无需改动。
+
+#### 18.3.3 ENG-01：LICENSE 与 README 矛盾
+
+**报告判断**：LICENSE 写 `All Rights Reserved`，README 却鼓励二次分发。
+
+**最终做法**：保留"禁止商用 + 禁止同赛道竞品"两条，其余放开——
+- `LICENSE` §2 改为"署名原作者前提下允许二次分发"；
+- `All Rights Reserved` → `Some Rights Reserved`；
+- README 同步措辞。
+
+#### 18.3.4 ENG-03：配置项清单
+
+`ZenithConfig`（`ModConfigSpec`）实际落地的配置项：
+
+**SERVER**
+- 性能：`mesoscaleRefreshTicks=64`、`backgroundRefreshTicks=256`、`coarseSyncTicks=40`、`weatherSnapshotTicks=100`
+- 现象开关：`enableTyphoon/StormCell/SquallLine/DustDevil/Monsoon/Thermal/SeaBreeze/Tornado`（默认全 true）
+- 维度：`weatherInNether=false`、`weatherInEnd=false`、`southernHemisphere=false`
+- 闪电：`lightningDamage=true`、`lightningSetsFire=true`、`lightningMaxDistanceFromPlayer=160`
+- 天气：`weatherOverridesVanillaRain=true`
+
+**CLIENT**
+- `particleDensity`、`fogMultiplier`、`windSoundVolume`、`showWindParticles`（四项均已接线）
+
+#### 18.3.5 需要说明的其它口径修正
+
+| 项 | 报告说法 | 实际 |
+|----|----------|------|
+| `getHeight(WORLD_SURFACE)` 语义 | 报告 §17.4 假定"地表上方第一格" | 正确。作 AGL 基准用 `h` 是对的；只有把它当方块坐标时才必须 `h-1`（即 `SYS-12`） |
+| `getMaxBuildHeight()` | 报告未提 | 是**开区间上界**，`y == maxBuildHeight` 会抛 `IllegalStateException`（`RT-05`/`L2-05` 的真正修法） |
+| `ServerLevel.advanceWeatherCycle()` | 报告未提 | 每 tick 以 0.01 步进 `rainLevel`；`Level.setRainLevel` 会每 tick 刷包——这是 `WX-SC-04` 不用 `setRainLevel` 而用 `setWeatherParameters` 的原因 |
+| `WindContribution` 5 参构造 | — | 保留，使尘卷/背风波/热泡等调用点行为与 0.1.4 **逐位一致** |
+
+#### 18.3.6 WX-SC-05（P3）：报告说"移速恒定、半径纯随机"，第一轮只修了移速
+
+**报告判断**：`moveX/moveZ` 生成后永不更新；`radiusBlocks = 60 + random*60` 与环境和强度无关。
+
+**第一轮的偏差**：Wave 4 只做到"移速跟引导气流"，半径仍留在 `60 + random*60`——即本条在标题层面被记成"已修"，实际只修了一半。
+
+**最终做法（`b2572b9`）**：半径由环境决定。
+
+```
+capeProxy = clamp01((humidity01 - 0.45) / 0.45)
+size01    = 0.5 * clamp01(stormActivity) + 0.5 * capeProxy
+radius    = 50 + size01 * 60 + (random - 0.5) * 20
+```
+
+即 50..110 格，随机项只剩 ±10 格抖动（同一天气下单体仍有大小差异，但干燥/弱强迫环境不会再抽出一个 120 格的巨型单体）。低层湿度被当作 CAPE 代理，因为 `MesoscaleGrid.Sample` 只带 `humidity01`，真正的 CAPE 需要逐列气块抬升，中尺度网格并不计算。
+
+### 18.4 实施者自行决定的设计选择（完整清单）
+
+以下选择报告未指定或建议不可行，由实施者决定。**每一条都可能影响观感或性能，请重点复核。**
+
+#### 18.4.1 物理与观感
+
+| 项 | 决定 |
+|----|------|
+| L1 垂直廓线 | 纯对数律，无底风地板；`z0 = 0.01·200^r`；`MIN_AGL_BLOCKS=0.3`。**眼高风 +46%、10 格风 +118%** |
+| 季风 WX-MS-01 | 不做"全维度均匀风向"，改 33×33 偏置场（256 格分辨率）+ `exp(-|D|/600)` 海岸加权，`REFRESH_TICKS=600`；作为 L0 基础流偏置而非独立现象 |
+| 微下击暴流 WX-SQ-03 | **实现而非删除**：成熟期按 `stormActivity` 概率生成，寿命 60–180 s，半径 20–50 格，上部下沉 + 触地后外流 |
+| 闪电 WX-SC-02/SQ-02 | **保留真实伤害与点火**，加四道闸（已加载区块 / 有天空光且无天花板 / 配置开关 / 离玩家 ≤160 格），而不是改成纯视觉 |
+| 半球与手性 | 默认北半球；`southernHemisphere` 配置项；`HemisphereConvention` 为唯一来源，`ZenithConfig.applyHemisphere()` 在 `Loading/Reloading` 调 `setHemisphereSign()` |
+| 台风剖面 | Holland `B=1.5`；`outerTaper()` 在 0.75R..R 平滑归零；入流角 `5°+20°·exp(-(r-Rmax)²/(2Rmax²))`；`eyeDampening` 只作用于切向分量 |
+| 台风 L0 足迹 | 高斯 σ=0.40·R，气压上限 1350 Pa，暖核 +1.8 K，湿度 0.35·强度；**不写风**（避免与逐点台风叠加成双倍） |
+| 热泡下沉补偿 | `SINK_PEAK_PER_UPDRAFT = 0.31390`，形状 `g(t)=t(1-t)³/0.10546875`（峰在 `r=1.3R`），环带 `R..2.2R`，上升/下沉通量比 = **1.00000** |
+| 尘卷切向剖面 | `TANGENTIAL_PEAK=0.6382`，`tangentialProfile(r)` 峰值归一化 = 1 |
+| 阵风时间结构 | 冻结湍流（Taylor 假设）：相位累积 + 本次湍流；不再每次刷新重采样 |
+| 山地波波长 | 显式 `WAVE_SCALE_COMPRESSION=0.08`，`λ=clamp(2πU/N·0.08, 40, 400)`——**承认 MC 尺度压缩**，不假装 0.5–7.9 km |
+| 平流雾 | `0.6·smoothstep(rh,0.70,0.95)·smoothstep(wind,1.5,4.5)·(1−smoothstep(wind,6,9))`；雨雾 `0.35·saturationDeficit(rh,0.85)` |
+| 雷暴单体半径 | 50..110 格，由 `stormActivity` + 湿度代理决定，随机只 ±10 格（§18.3.6） |
+| L0 群系温度标定 | 255..310 K |
+| L1 高层切变参考高度 | 取 300 AGL（`SHEAR_HIGH_LAYER = MAX_LAYERS-1`），而非报告暗示的 110 |
+| L1 连续性强迫耦合 | `CONTINUITY_COUPLING=0.5`，`MAX_CONTINUITY_W_MPS=3.0` |
+| 粗风场半径 | ±384 格（报告建议 ±192） |
+| 现象层合成 | 每格点合成一条矢量，而非发剖面参数 |
+| 原版降雨回写 WX-SC-04 | **不直接 `setRainLevel`**，改 `setWeatherParameters(0, 600, true, wantThunder)`；`ownRain = holdUntilTick > now`；风暴离开 `STOP_LINGER_TICKS=0` 收雨 |
+| 冰雹伤害源 | 新增 `ZenithDamageTypes.HAIL`（`data/zenith/damage_type/hail.json`），不再用 `generic` |
+
+#### 18.4.2 帆船 SAIL（Wave 5，全部自行决定）
+
+| 项 | 决定 |
+|----|------|
+| 前向约定 | `fwd = (-sin h, cos h)`，`headingRadians ≡ MC yaw`，渲染器 `-yaw` |
+| 风向 | 来向 `atan2(windX, -windZ)`；横漂 `leeway = 0.12·sin(pointOfSail)` |
+| 移动 | `move(MoverType.SELF, …)` 单次 + 被挡部分速度回写 + 软浮力 `vy=clamp(yErr*0.35, ±0.25)` + 落水 `×0.6` + 终端 `-1.2` |
+| 阻力/质量 | `LATERAL_RESISTANCE_K=600`、`HULL_MASS_KG=800` |
+| 推进系数 | `NO_GO_FADE=0.12`、`0.85·sin(πt)^0.7`、顺风上限 `DOWNWIND_CEILING=0.45` |
+| 配平 | `TRIM_RATE_PER_TICK 0.008→0.05` + 客户端 `clientTrimPrediction` |
+| 采样 | `effectiveVelocityVector()`（含阵风），采样点 `y+1.8` |
+| 水线 | 搜索窗 `[-5,+5]`，`FLOAT_DRAFT = 0.30`（**不采用**报告建议的 `waterY+0.05`） |
+| 放置 | 要求 `FluidState.is(Fluids.WATER)` |
+
+#### 18.4.3 架构与 API
+
+| 项 | 决定 |
+|----|------|
+| `Source` 枚举 | 新增 `PHENOMENA`/`COMPOSITE` + `layers()` 位标记；API 版本 `0.1`→`0.2`（**不兼容变更**） |
+| `hasFlow()` | 改判矢量模长；`isTrustedForGameplay()` 不再用 `hasFlow()` |
+| 天气事件 | `api/` 自建监听器表，**不挂 NeoForge EventBus**（保持 `api/` 零 MC 依赖） |
+| 热源索引 | 按 `16³` 段归并 + `maybeHas` 预筛 + 玩家分桶 ±32 格 / 下 32 上 40 / 200 tick 重扫 / `SCHEDULE_INTERVAL_TICKS=20` / 单次返回最近 128 个 |
+| 粗场增量 | 以 `coarseBase` 为基准、`DIRTY_EPSILON_MPS=0.1`、`FULL_RESEND_FRACTION=0.6`；新玩家补一帧**当前**全量帧 |
+| 龙卷 | 独立 `weather/TornadoSystem`（逐点），L0 只留足迹；`Sample.tornadoWindX/Z` 恒 0（字段保留） |
+| 季风 | 不做 `WeatherPhenomenon`，改 L0 `BaseFlowBias` |
+| 持久化 | `ZenithRandom`（SplitMix64）+ `WeatherNbt` + `ZenithWeatherSavedData`，挂 `ServerStoppingEvent` |
+| 涡轮探针 | 200 tick 滑动平均，`FULL_SCALE_MPS=18`，`OVERLOAD_RATIO=1.6` |
+| 龙卷渲染 | 双 pass（背面→`endBatch`→正面），相机空间深度插入排序 |
+| 光照贴图 | `POSITION_COLOR_LIGHTMAP` + `POSITION_COLOR_LIGHTMAP_SHADER`；船/风向标用管线 `light`，龙卷用底部 `packedLightAt` |
+| 焦点 | 单遍聚类 + `FOCUS_CLUSTER_RADIUS_BLOCKS=256` + 吸附 64 格瓦片 |
+| 线程安全 | `ConcurrentHashMap` + `ReentrantLock` + `assert isSameThread()`；`FRESHNESS_DECAY_TICKS=256` 让 `confidence` 最差 0.75× |
+| 气象图 | 8 档滚轮缩放 `{384,256,192,128,96,64,48,32}`；ASCII 字母 + 颜色替代 emoji；Liang–Barsky 裁剪 |
+| 测试 | 只覆盖不依赖 MC 运行时的纯函数（80 用例）；`ZenithAirfoilDefinition.isUpperLowerLayout` 单调性容差 `1e-9→1e-2` |
+
+### 18.5 逐条复核中新发现的 8 条"此前未真正修完"
+
+第一轮按报告标题逐条实施后，第二轮**按代码路径逐条复核**（而不是按标题打勾），发现以下 8 条在报告层面标"已修"、实际未闭环。**这是本轮最需要知悉的诚实说明**：报告标题与代码行为之间存在偏差，第一轮的"已修"判定有一部分是标题级的。
+
+| 编号 | 第一轮的问题 | 本轮补齐 |
+|------|--------------|----------|
+| WX-FR-02 | `WindContribution` 只有风/湍流/降水，`FrontSystem` 也没算热力 | 扩 7 字段 record + 半平面热力/气压 + 5 参兼容 |
+| WX-FRONT-01 | 锋面仍在玩家周围随机圆环生成 | `nearestLowPressureCenter()` + 槽线挂靠 + 倾斜/偏移/引导气流 |
+| BLK-04 | 仍读瞬时 `effectiveSpeed` | 200 tick 滑均 + 过载信号 + 不可信清空 |
+| CLI-07 | 只做了排序 + `endBatch`，没有双 pass | 背面/正面两趟 + 相机空间排序 |
+| CLI-09 | 只接了光照/雾，格式仍是 `POSITION_COLOR` | 改 `POSITION_COLOR_LIGHTMAP` + 真实 UV2 |
+| SYS-06 | 焦点仍是全体玩家均值；海风建场/采样锚点不一致 | 聚类 + `fieldFocusX/Z` + `CENTER_INDEX` 修 32 格偏移 |
+| SYS-10 | 只修了热源索引，现象层与 L2 探针仍会同步加载 | `hasChunkAt` 前置 + `chunkIfLoaded` |
+| SYS-11 | 无锁、无 `assert`、`confidence` 恒 0.9 | 锁 + `assert` + 新鲜度衰减 |
+
+另有 `WX-SC-05` 同类偏差（第一轮只修了移速、半径仍纯随机），在 §18.3.6 单独记录。
+
+### 18.6 验证
+
+构建环境限制：Gradle 原生构建在本机**不可用**（`--offline` 下 `:createMinecraftArtifacts` 报 `Could not resolve net.neoforged:neoform-runtime:2.0.31`，`files-2.1` 有 jar 但 `metadata-2.107` 缺 descriptor，且无网络）。因此验证改用等价的三段式：
+
+| 检查 | 方法 | 结果 |
+|------|------|------|
+| 全量编译 | `javac`（JDK 21，class 65）+ 237 个 jar 的 classpath，120 个源文件 | `exit=0`，仅 4 行 deprecation note |
+| 单元测试 | JUnit 5.11.4 离线跑 11 个测试类 | **80 tests, 0 skipped, 0 failed** |
+| gold values 复算 | `.verify/Verify.java` 独立实现，对照 §17.2 | `ALL CHECKS PASSED` |
+
+gold values 关键项（与 §17.2 一致）：L1 AGL 1.62 → 0.4078、AGL 10 → 0.6054；`turnNear=-29.58°`、`turnTop=0.001°`；NACA 4412 `maxThickness=0.119850`；`driveCoefficient` 105° → 0.8500；`API-11` `hasFlow=false` 时 `trusted=true`。
+
+**未验证项**（与 §17.4 相同）：未启动游戏、未做随机统计、未做性能实测。所有"观感"结论仍来自代码路径推导。
+
+### 18.7 本轮未做的事
+
+1. **未运行游戏**：所有观感数字是代码推导，不是截图/录像比对；
+2. **未做性能基准**：`HeatCache` 的段级预筛、`L1` 的双线性、粗场增量的实际 tick 开销未测；
+3. **`L2-02` 只做了策略门控**：没有 L2 结果缓存、没有异步体素网格、没有 `quality` 参数（§18.2.5）；
+4. **未补美术资源**：`logoFile` 留空，`docs/02` 建议的新贴图未做；
+5. **未实现 `docs/03` 路线图里的未审功能**：`ClientAtmosphere`、局地降水、积雪、冰面摩擦等仍属"未实现"，不在本次 122 条范围内；
+6. **`api/` 版本 `0.2` 是不兼容变更**：外部模组若已按 `0.1` 接入，需要重新适配 `Source`/`layers()`。
+
+---
+
 ## 附：报告编号索引
 
 | 章节 | 内容 | 标题数（含已关闭） | 其中现存 |
@@ -2726,3 +3141,4 @@ BUILD FAILED in 2m 42s
 | **合计** | — | **136** | **122** |
 | §14 | 旧台账 126 编号状态矩阵 | 24 关闭 / 5 部分 / 97 未修 | — |
 | §15–§17 | 文档差异 / 路线图 / 构建与复算 | — | — |
+| §18 | 修复记录（0.1.5-alpha） | 121 关闭 / 1 部分 | — |
