@@ -93,8 +93,13 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
     public static final int MESOSCALE_REFRESH_TICKS = 64;
     public static final int COARSE_WIND_SYNC_TICKS = 40;
     public static final int WEATHER_SNAPSHOT_TICKS = 100;
-    public static final int COARSE_WIND_SYNC_CELL_SIZE_BLOCKS = 32;
-    public static final int COARSE_WIND_SYNC_RADIUS_CELLS = 4; // 9×9
+    /**
+     * 粗风场网格间距（格）：与 L1 源网格一致（NET-01）。
+     * 旧值 32 比源网格 64 还细，客户端只是在对阶梯场再采样。
+     */
+    public static final int COARSE_WIND_SYNC_CELL_SIZE_BLOCKS = CoarseWindPacket.DEFAULT_CELL_SIZE_BLOCKS;
+    /** 粗风场半径（格）：±6×64 = ±384 格，覆盖 12 区块视距（±192）并留余量。 */
+    public static final int COARSE_WIND_SYNC_RADIUS_CELLS = CoarseWindPacket.DEFAULT_RADIUS_CELLS;
 
     private static ZenithServerRuntime INSTANCE;
 
@@ -138,6 +143,20 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
         /** 存档状态是否已装回来（SYS-08）。 */
         boolean restored;
 
+        /**
+         * 上一 tick 的墙钟时间（{@link System#nanoTime()}）。{@code -1} 表示还没跑过。
+         * 物理步长必须来自真实时间，不能写死 0.05 s（RT-03）。
+         */
+        private long lastTickNanos = -1;
+        /** 距上次 L1 刷新累积的**真实**秒数：冻结湍流的图样按它推进（L1-05 / RT-03）。 */
+        double accumulatedDtSeconds = 0;
+        /** 距上次 L0 刷新累积的真实秒数。 */
+        double accumulatedL0DtSeconds = 0;
+        /** 上一 tick 的 dayTime：用于识别睡眠/时间跳变（RT-03）。 */
+        private long lastDayTime = -1;
+        /** 已处理的 dayTime 跳变：{@code >= 0} 表示下一次 L0 刷新要补子步。 */
+        private int pendingL0Substeps = 1;
+
         DimensionState(long seed, int dimensionSalt) {
             // 每个现象一个独立随机流：同维度内不同现象互不干扰，跨维度也不同（SYS-08）
             long base = seed ^ ((long) dimensionSalt * 0x9E3779B97F4A7C15L);
@@ -172,6 +191,41 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
         List<WeatherPhenomenon> persistentPhenomena() {
             return List.of(fronts, thermals, dustDevils, storms, typhoons, squallLines, tornadoes);
         }
+
+        /**
+         * 本 tick 的物理步长（秒），来自真实墙钟时间（RT-03）。
+         *
+         * <p>旧实现写死 {@code dt = 0.05}：{@code /tick rate 5} 时模拟时间只走 1/4、
+         * 服务器卡到 5 TPS 时天气跟着变慢、睡眠跳夜后 L0 的日变化瞬间跳变。
+         * 现在按真实间隔给，并夹在 {@code [1/400, 0.25]} s：上限防一次卡顿把风暴推过量，
+         * 下限防 `/tick rate` 调得极高时步长趋近 0 让所有松弛停摆。
+         */
+        double advanceDtSeconds() {
+            long now = System.nanoTime();
+            if (lastTickNanos < 0) {
+                lastTickNanos = now;
+                return ZenithServerRuntime.SOLVER_STEP_SECONDS;
+            }
+            double dt = (now - lastTickNanos) / 1.0e9;
+            lastTickNanos = now;
+            if (!(dt > 0)) dt = ZenithServerRuntime.SOLVER_STEP_SECONDS;
+            return Math.max(1.0 / 400.0, Math.min(0.25, dt));
+        }
+
+        /**
+         * 睡眠/时间跳变检测（RT-03）：{@code dayTime} 一次跳超过 1000 tick 时，
+         * 把跳变折算成若干个 L0 子步，而不是让日变化（日照/山谷风相位）一步跳过去。
+         */
+        void noteDayTime(long dayTime) {
+            if (lastDayTime >= 0) {
+                long jump = dayTime - lastDayTime;
+                if (jump > 1000) {
+                    int n = (int) Math.min(64, Math.ceil(jump / 1200.0));
+                    pendingL0Substeps = Math.max(pendingL0Substeps, n);
+                }
+            }
+            lastDayTime = dayTime;
+        }
     }
 
     private final Map<ResourceKey<Level>, DimensionState> dimensions = new HashMap<>();
@@ -183,7 +237,9 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
             s.terrainAdapter = new McTerrainAdapter(level, s.hashedTerrain);
             s.l2 = new LocalFlowSolver(
                     (x, y, z) -> {
-                        if (y < level.getMinBuildHeight() || y > level.getMaxBuildHeight()) return false;
+                        // getMaxBuildHeight() 是**开区间上界**（RT-05 / L2-05）：
+                        // y == maxBuildHeight 会抛 IllegalStateException，旧代码写成 > 且靠 try/catch 掩盖
+                        if (y < level.getMinBuildHeight() || y >= level.getMaxBuildHeight()) return false;
                         BlockState st = level.getBlockState(new BlockPos(x, y, z));
                         return st.isSolid();
                     },
@@ -260,7 +316,7 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
     private void tickDimension(ServerLevel level) {
         DimensionState s = stateFor(level);
         long tick = level.getGameTime();
-        double dt = SOLVER_STEP_SECONDS;
+        double dt = s.advanceDtSeconds();
 
         // 焦点取玩家平均位置，没人在线就用出生点
         updateFocus(level, s);
@@ -268,6 +324,11 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
         double timeOfDay = (level.getDayTime() % 24000L) / 24000.0;
         boolean raining = level.isRaining();
         boolean thundering = level.isThundering();
+
+        // 真实墙钟步长（RT-03）：累积到 L0/L1 刷新时才消费
+        s.noteDayTime(level.getDayTime());
+        s.accumulatedDtSeconds += dt;
+        s.accumulatedL0DtSeconds += dt;
 
         // 维度门控（SYS-09）：下界/末地没有天气语义，硬跑只会生出"基岩上的热泡"
         // 和"真闪电劈基岩"，还白烧热源扫描。天气现象整段跳过；L0/L1 风场仍然推进，
@@ -304,14 +365,26 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
         int l0Ticks = Math.max(1, net.atomos.zenith.ZenithConfig.backgroundRefreshTicks());
         if (tick % l0Ticks == 0) {
             s.l0.setFocus(s.focusX, s.focusZ);
-            s.l0.refresh(s.driver, s.terrainAdapter, l0Ticks * dt,
-                    timeOfDay, raining, SeasonSystem.compute(level.getDayTime()).tempBiasKelvin());
+            // 睡眠跳夜（RT-03）：把跳变折算成 n 个子步，每个子步各推进 1/n 的日变化，
+            // 不让日照/山谷风相位一步从前夜跳到清晨。
+            int substeps = Math.max(1, s.pendingL0Substeps);
+            s.pendingL0Substeps = 1;
+            double l0Dt = Math.max(1.0e-3, s.accumulatedL0DtSeconds) / substeps;
+            double seasonBias = SeasonSystem.compute(level.getDayTime()).tempBiasKelvin();
+            for (int sub = 0; sub < substeps; sub++) {
+                double subTimeOfDay = (timeOfDay + (double) sub / substeps) % 1.0;
+                s.l0.refresh(s.driver, s.terrainAdapter, l0Dt,
+                        subTimeOfDay, raining, seasonBias);
+            }
+            s.accumulatedL0DtSeconds = 0;
         }
         // 4) L1 刷新
         int l1Ticks = Math.max(1, net.atomos.zenith.ZenithConfig.mesoscaleRefreshTicks());
         if (tick % l1Ticks == 0) {
             s.l1.setFocus(s.focusX, s.focusZ);
-            s.lastDiagnostics = s.l1.refresh(s.l0, s.terrainAdapter, timeOfDay, raining, tick);
+            s.lastDiagnostics = s.l1.refresh(s.l0, s.terrainAdapter, timeOfDay, raining, tick,
+                    Math.max(1.0e-3, s.accumulatedDtSeconds));
+            s.accumulatedDtSeconds = 0;
         }
 
         // 5) 热源缓存刷新（无天气的维度不需要 L2 热源，省掉 50k 次方块查询）
@@ -405,10 +478,16 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
         return sampleInternal(world, c.x(), c.y(), c.z(), policy, false);
     }
 
+    /**
+     * {@link net.atomos.zenith.api.ZenithTerrainProvider} 的实现（API-04）。
+     *
+     * <p>旧实现恒返回 {@code unknown()}：`ZenithTerrainApi.sample()` 走的是这个方法，
+     * 而真正有实现的 {@code sampleTerrain()} 挂在另一个接口上、全仓零调用。
+     * 外部模组问"这里地形多高"永远得到 UNKNOWN。现在直接转发。
+     */
     @Override
     public net.atomos.zenith.api.ZenithTerrainSample sample(ZenithWorldRef world, ZenithBlockPos pos) {
-        // 地形采样还没接真实高度查询，先返回未知
-        return net.atomos.zenith.api.ZenithTerrainSample.unknown();
+        return sampleTerrain(world, pos);
     }
 
     private ZenithWindSample sampleInternal(ZenithWorldRef worldRef, double x, double y, double z,
@@ -420,15 +499,18 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
                         : ZenithWindSample.Authority.SERVER_AUTHORITATIVE);
         if (server == null) return b.build();
 
-        ServerLevel level = null;
-        for (ServerLevel l : server.getAllLevels()) {
-            if (l.dimension().location().toString().equals(worldRef.dimension().toString())) {
-                level = l;
-                break;
-            }
-        }
+        ServerLevel level = levelFor(worldRef);
         if (level == null) return b.build();
         DimensionState s = stateFor(level);
+
+        // 采样策略是**真的分层门控**（API-01）：旧实现 policy 传进来一次都没读，
+        // SERVER_COARSE_ONLY（最便宜的语义）照样跑 729 次方块查询的 L2。
+        //
+        // 分界线定在"要不要付 L2 的账"：COARSE 只给 L1；其余全部含现象层与 L2。
+        // GAMEPLAY_SERVER_ONLY 必须保留 L2 —— 帆船的尾流/遮蔽、风道接力（BLK-07 的
+        // localModifier 里就是上游射流）都靠它，砍掉会把玩法打断。
+        boolean wantPhenomena = policy != SamplePolicy.SERVER_COARSE_ONLY;
+        boolean wantLocal = policy != SamplePolicy.SERVER_COARSE_ONLY;
 
         // L1 基流
         MesoscaleGrid.Sample l1 = s.l1.sample(x, y, z);
@@ -436,7 +518,7 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
 
         // 天气现象贡献（无天气维度直接跳过：现象只在 tick 里生成，这里再兜一层）
         double turbAdd = 0, precip = 0;
-        if (weatherEnabled(level)) {
+        if (wantPhenomena && weatherEnabled(level)) {
             for (WeatherPhenomenon p : s.phenomena()) {
                 if (!phenomenonEnabled(p)) continue;
                 WindContribution c = p.sample(x, y, z, vx, vz);
@@ -452,31 +534,81 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
         // 台风眼：不再乘总风。Holland 廓线在 r→0 时已平滑趋于 0，眼内只有台风环流消失，
         // L1 背景风仍然存在（WX-TY-03：旧实现把眼内背景风也一起抹掉了）。
 
-        // L2 本地修正：服务端也算一份，gameplay 的遮蔽/绕流就靠它
-        LocalFlowSolver.LocalFlow l2 = s.l2.solve(x, y, z, vx, vy, vz);
-
+        // L2 本地修正：只有 FULL 级策略才付 729 次方块查询的账（L2-02 / API-01）
+        LocalFlowSolver.LocalFlow l2 = wantLocal
+                ? s.l2.solve(x, y, z, vx, vy, vz)
+                : LocalFlowSolver.LocalFlow.NONE;
         double turb = l1.turbulenceIntensity() >= 0
                 ? Math.min(1.0, l1.turbulenceIntensity() + turbAdd)
                 : Math.min(1.0, 0.1 + turbAdd);
+
+        // Source 必须反映**实际参与合成的最高层**（API-01）：旧实现无论 policy 都写 L1_COARSE
+        ZenithWindSample.Source source = wantLocal
+                ? ZenithWindSample.Source.L2_LOCAL
+                : ZenithWindSample.Source.L1_COARSE;
+        // 置信度：L1 的 0.9 反映 64 格分辨率；L2 的置信度看扫描覆盖率与区块加载状态（L2-05）
+        float confidence = wantLocal ? (float) (0.9 * l2.confidence()) : 0.9f;
 
         return b.meanVelocity(ZenithVec3.of(vx, vy, vz))
                 .gustVelocity(ZenithVec3.of(l1.gustX(), l1.gustY(), l1.gustZ()))
                 .localModifier(ZenithVec3.of(l2.modX(), l2.modY(), l2.modZ()))
                 .turbulenceIntensity((float) turb)
                 .windShearPerBlock((float) l1.shearPerBlock())
+                // 气压从 L0 透传（L0-07 / API-07）：旧实现恒 0，API 文档里的字段是死值
+                .pressureAnomalyPa((float) l1.pressureAnomalyPa())
                 .airTemperatureKelvin((float) l1.airTempK())
                 .humidity01((float) l1.humidity01())
                 .sheltered(l2.sheltered() || l1.sheltered())
-                .source(ZenithWindSample.Source.L1_COARSE)
-                .confidence(0.9f)
+                .source(source)
+                .confidence(confidence)
                 .freshnessEpoch(level.getGameTime())
                 .build();
     }
 
+    /** 按维度键取 ServerLevel：不再每次遍历 + {@code toString()} 新建字符串（RT-05）。 */
+    private ServerLevel levelFor(ZenithWorldRef worldRef) {
+        MinecraftServer server = net.neoforged.neoforge.server.ServerLifecycleHooks.getCurrentServer();
+        if (server == null) return null;
+        ResourceKey<Level> key = dimensionKey(worldRef);
+        if (key != null) {
+            ServerLevel direct = server.getLevel(key);
+            if (direct != null) return direct;
+        }
+        // 名字对不上（模组维度动态注册时 ResourceKey 可能不等）才退回逐维度比较
+        for (ServerLevel l : server.getAllLevels()) {
+            if (l.dimension().location().toString().equals(worldRef.dimension().toString())) return l;
+        }
+        return null;
+    }
+
+    /**
+     * 维度键（RT-05）：先查 {@link #DIMENSION_KEYS} 的规范映射，再按 {@code namespace:path} 现拼。
+     * 旧实现每次都 {@code getAllLevels()} 遍历 + {@code toString()} 新建字符串 + {@code equals}。
+     */
+    private static ResourceKey<Level> dimensionKey(ZenithWorldRef worldRef) {
+        String id = worldRef.dimension().toString();
+        ResourceKey<Level> known = DIMENSION_KEYS.get(id);
+        if (known != null) return known;
+        try {
+            return ResourceKey.create(net.minecraft.core.registries.Registries.DIMENSION,
+                    net.minecraft.resources.ResourceLocation.parse(id));
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    /** 原版三维度的规范键缓存（RT-05）。 */
+    private static final Map<String, ResourceKey<Level>> DIMENSION_KEYS = Map.of(
+            "minecraft:overworld", Level.OVERWORLD,
+            "minecraft:the_nether", Level.NETHER,
+            "minecraft:the_end", Level.END);
+
     @Override
     public ZenithL2Result runL2(ZenithL2Request request) {
-        // L2-lite 诊断接口：先给个零力矩占位
-        return ZenithL2Result.of(net.atomos.zenith.api.ZenithL2ForceMoment.zero());
+        // API-02：这里从来没有真正的 L2 力矩求解器。旧实现返回 of(zero)，
+        // 而 of() 的唯一语义是 supported=true —— 等于告诉调用方"支持，力=0 N"，
+        // 与"这里真的没风"无法区分。现在明确报 unsupported。
+        return ZenithL2Result.unsupported();
     }
 
     /**
@@ -526,20 +658,21 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
         }
     }
 
+    /**
+     * 地形采样（API-04）：转发到真正的实现，不再恒返回 {@code unknown}。
+     *
+     * <p>注意高度口径：{@code terrainHeightBlocks} 是**地表顶面 y**（AGL 基准，作方块坐标要减 1）。
+     * 对外的 {@code ZenithTerrainSample.heightY} 语义是"最高的非空气方块 y"，所以这里减 1。
+     */
     @Override
     public ZenithTerrainSample sampleTerrain(ZenithWorldRef world, ZenithBlockPos pos) {
-        MinecraftServer server = net.neoforged.neoforge.server.ServerLifecycleHooks.getCurrentServer();
-        if (server == null) return ZenithTerrainSample.unknown();
-        for (ServerLevel l : server.getAllLevels()) {
-            if (l.dimension().location().toString().equals(world.dimension().toString())) {
-                DimensionState s = stateFor(l);
-                double h = s.terrainAdapter.terrainHeightBlocks(pos.x(), pos.z());
-                return ZenithTerrainSample.of((int) h,
-                        (float) s.terrainAdapter.roughness01(pos.x(), pos.z()),
-                        s.terrainAdapter.surfaceAt(pos.x(), pos.z()));
-            }
-        }
-        return ZenithTerrainSample.unknown();
+        ServerLevel level = levelFor(world);
+        if (level == null) return ZenithTerrainSample.unknown();
+        DimensionState s = stateFor(level);
+        double surfaceTop = s.terrainAdapter.terrainHeightBlocks(pos.x(), pos.z());
+        return ZenithTerrainSample.of((int) Math.floor(surfaceTop) - 1,
+                (float) s.terrainAdapter.roughness01(pos.x(), pos.z()),
+                s.terrainAdapter.surfaceAt(pos.x(), pos.z()));
     }
 
     // 热源缓存
@@ -591,26 +724,74 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
 
     // 网络广播
 
+    /**
+     * 粗风场同步（NET-01 / RT-01 / RT-04）。
+     *
+     * <p>三层修正：
+     * <ul>
+     *   <li>分辨率与 L1 源网格对齐（64 格），覆盖 ±6 格 × 64 = ±384 格（视距 192 的 2 倍），
+     *       不再发"比源网格还细"的假精度；</li>
+     *   <li>除了 L1 基流，再发一条**现象层合成矢量**——台风眼墙、飑线阵风锋、尘卷风、热泡
+     *       在客户端终于可见（旧包只有 L1，客户端把 30 m/s 的台风看成 5 m/s 的背景风）；</li>
+     *   <li>按维度缓存一份网格再分发给该维度全体玩家：旧实现每个玩家单独 81 次采样 + 独立包，
+     *       20 人服就是 1620 次/2 s，而 40 tick 内格点值几乎不变（RT-04）。</li>
+     * </ul>
+     */
     private void broadcastCoarseWind(ServerLevel level, DimensionState s) {
-        for (ServerPlayer player : level.players()) {
-            double px = player.getX(), py = player.getY(), pz = player.getZ();
-            int n = COARSE_WIND_SYNC_RADIUS_CELLS * 2 + 1;
-            float[] vx = new float[n * n];
-            float[] vy = new float[n * n];
-            float[] vz = new float[n * n];
-            for (int i = 0; i < n; i++)
-                for (int j = 0; j < n; j++) {
-                    double bx = px + (i - COARSE_WIND_SYNC_RADIUS_CELLS) * COARSE_WIND_SYNC_CELL_SIZE_BLOCKS;
-                    double bz = pz + (j - COARSE_WIND_SYNC_RADIUS_CELLS) * COARSE_WIND_SYNC_CELL_SIZE_BLOCKS;
-                    MesoscaleGrid.Sample smp = s.l1.sample(bx, py, bz);
-                    int k = j * n + i;
-                    vx[k] = (float) smp.windX();
-                    vy[k] = (float) smp.windY();
-                    vz[k] = (float) smp.windZ();
+        var players = level.players();
+        if (players.isEmpty()) return;
+
+        // 以玩家质心为中心建一张网格（所有人共用的那份）
+        double cx = 0, cz = 0;
+        for (ServerPlayer p : players) { cx += p.getX(); cz += p.getZ(); }
+        cx /= players.size();
+        cz /= players.size();
+        // 对齐到单格间距的整数倍：相邻两次广播的格点重合，客户端插值不会来回抖
+        double cell = COARSE_WIND_SYNC_CELL_SIZE_BLOCKS;
+        cx = Math.floor(cx / cell) * cell;
+        cz = Math.floor(cz / cell) * cell;
+        double cy = players.get(0).getY();
+
+        int n = COARSE_WIND_SYNC_RADIUS_CELLS * 2 + 1;
+        int cells = n * n;
+        float[] vx = new float[cells], vy = new float[cells], vz = new float[cells];
+        float[] phx = new float[cells], phy = new float[cells], phz = new float[cells];
+
+        boolean weather = weatherEnabled(level);
+        for (int i = 0; i < n; i++) {
+            for (int j = 0; j < n; j++) {
+                double bx = cx + (i - COARSE_WIND_SYNC_RADIUS_CELLS) * cell;
+                double bz = cz + (j - COARSE_WIND_SYNC_RADIUS_CELLS) * cell;
+                int k = j * n + i;
+
+                MesoscaleGrid.Sample smp = s.l1.sample(bx, cy, bz);
+                vx[k] = (float) smp.windX();
+                vy[k] = (float) smp.windY();
+                vz[k] = (float) smp.windZ();
+
+                if (!weather) continue;
+                // 现象层：只在**这一格**采样，且传 0 基流，得到的就是"现象额外提供的那部分风"
+                double px = 0, py = 0, pz = 0;
+                for (WeatherPhenomenon p : s.phenomena()) {
+                    if (!phenomenonEnabled(p)) continue;
+                    WindContribution c = p.sample(bx, cy, bz, 0, 0);
+                    if (c.isNone()) continue;
+                    px += c.vx();
+                    py += c.vy();
+                    pz += c.vz();
                 }
-            PacketDistributor.sendToPlayer(player,
-                    new CoarseWindPacket(px, py, pz, COARSE_WIND_SYNC_CELL_SIZE_BLOCKS,
-                            COARSE_WIND_SYNC_RADIUS_CELLS, vx, vy, vz, level.getGameTime()));
+                phx[k] = (float) px;
+                phy[k] = (float) py;
+                phz[k] = (float) pz;
+            }
+        }
+
+        CoarseWindPacket pkt = new CoarseWindPacket(
+                level.dimension().location().toString(),
+                cx, cy, cz, (int) cell, COARSE_WIND_SYNC_RADIUS_CELLS,
+                vx, vy, vz, phx, phy, phz, level.getGameTime());
+        for (ServerPlayer player : players) {
+            PacketDistributor.sendToPlayer(player, pkt);
         }
     }
 
@@ -634,14 +815,8 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
     // ZenithWeatherRuntimeProvider 接口实现
 
     private DimensionState stateFor(net.atomos.zenith.api.ZenithWorldRef worldRef) {
-        MinecraftServer server = net.neoforged.neoforge.server.ServerLifecycleHooks.getCurrentServer();
-        if (server == null) return null;
-        for (ServerLevel l : server.getAllLevels()) {
-            if (l.dimension().location().toString().equals(worldRef.dimension().toString())) {
-                return stateFor(l);
-            }
-        }
-        return null;
+        ServerLevel level = levelFor(worldRef);
+        return level == null ? null : stateFor(level);
     }
 
     @Override
@@ -834,6 +1009,17 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
             return biome.unwrapKey().map(k -> k.equals(Biomes.DESERT)).orElse(false);
         }
 
+        /**
+         * 生物群系基础温度 → 开尔文。
+         *
+         * <p>旧实现 {@code 273.15 + t*30}（L0-05）：沙漠 t=2.0 → 333 K（60 °C），
+         * 与真实下垫面差了 20 K，ABL 稳定度被永久钉成"强不稳定"、混合层高度恒 460 格；
+         * 雪原 t=-0.5 → 258 K 又偏高。
+         *
+         * <p>按 MC 实际三类下垫面标定到 {@link BackgroundMetGrid#BIOME_TEMP_MIN_K}..{@code MAX_K}：
+         * 雪原 -0.5 → 255 K（-18 °C）、温带 0.8 → 283 K（10 °C）、沙漠 2.0 → 310 K（37 °C）。
+         * 超出 [-0.5, 2.0] 的模组生物群系夹到端点。
+         */
         @Override
         public double biomeTemperatureKelvin(double bx, double bz) {
             ChunkAccess c = chunkIfLoaded(bx, bz);
@@ -844,7 +1030,17 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
             } else {
                 t = 0.7f;
             }
-            return 273.15 + t * 30.0; // 生物群系温度是 0~1 左右的数，粗略换算成开尔文
+            double u = (t - BackgroundMetGrid.BIOME_TEMP_MIN_INPUT)
+                    / (BackgroundMetGrid.BIOME_TEMP_MAX_INPUT - BackgroundMetGrid.BIOME_TEMP_MIN_INPUT);
+            u = u < 0 ? 0 : Math.min(1, u);
+            return BackgroundMetGrid.BIOME_TEMP_MIN_K
+                    + u * (BackgroundMetGrid.BIOME_TEMP_MAX_K - BackgroundMetGrid.BIOME_TEMP_MIN_K);
+        }
+
+        /** 海平面（方块 y）：L0 的高度递减率只对海平面以上生效（L0-05）。 */
+        @Override
+        public double seaLevelBlocks() {
+            return level.getSeaLevel();
         }
 
         @Override

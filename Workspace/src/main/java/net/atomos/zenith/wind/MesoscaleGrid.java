@@ -41,6 +41,28 @@ public class MesoscaleGrid {
      */
     private static final double MIN_AGL_BLOCKS = 0.3;
 
+    /**
+     * 阵风的水平相关长度（格）。"冻结湍流"假设下的湍流涡尺度：阵风图样以平均风速整体平移，
+     * 而不是原地每 64 tick 重新掷骰子（L1-05）。
+     */
+    private static final double GUST_LENGTH_SCALE_BLOCKS = 200.0;
+    /** 阵风横向分量相对纵向的权重（L1-05：旧实现完全没有横向分量）。 */
+    private static final double GUST_CROSS_WEIGHT = 0.35;
+    /** 0–1 km 风切变的高度层：用第 0 层（2 AGL）与顶层（300 AGL）。 */
+    private static final int SHEAR_LOW_LAYER = 0;
+    private static final int SHEAR_HIGH_LAYER = MAX_LAYERS - 1;
+    /** 用于 ∂u/∂z 的较高层：第 2 层（14 AGL），Δz = 12 格。 */
+    private static final int SHEAR_VERTICAL_LAYER = 2;
+    /** 连续方程积分出的垂直速度上限（m/s），防止数值放大。 */
+    private static final double MAX_CONTINUITY_W_MPS = 3.0;
+    /**
+     * 连续方程补偿的耦合系数：显式源项（坡风/对流）已经给了地面垂直速度，
+     * 连续方程补的是"辐合必须抬升"的约束，两者各占一部分，避免叠加成双倍。
+     */
+    private static final double CONTINUITY_COUPLING = 0.5;
+    /** 域外回退 L0 的过渡宽度（格）：出界 512 格后完全用 L0（L1-02）。 */
+    private static final double OUTSIDE_FADE_BLOCKS = 512.0;
+
     public static final double ABL_NEUTRAL_HEIGHT_BLOCKS = 280.0;
     public static final double ABL_STABLE_HEIGHT_BLOCKS = 120.0;
     public static final double ABL_UNSTABLE_HEIGHT_BLOCKS = 460.0;
@@ -63,11 +85,25 @@ public class MesoscaleGrid {
         public final double[] humidity01 = new double[MAX_LAYERS];
         public double turbulenceIntensity;
         public double gustX, gustY, gustZ;
-        public double shearXPerBlock, shearZPerBlock;
+        /** 冻结湍流的图样相位（噪声单位）：每刷新按 {@code U·dt/L} 推进（L1-05）。 */
+        public double gustPhaseX, gustPhaseZ;
+        /**
+         * 0–1 km 矢量风切变 {@code |V(110 AGL) − V(2 AGL)| / Δz}（每格的 m/s 差）。
+         *
+         * <p>旧实现的 {@code shearXPerBlock}/{@code shearZPerBlock} 其实是 {@code ∂u/∂x}、{@code ∂w/∂z}，
+         * 那是**正应变率**不是切变（L1-03）；龙卷/超级单体要的是不同高度的**矢量差**。
+         */
+        public double bulkShearPerBlock;
+        /** 相对涡度 {@code ζ = ∂w/∂x − ∂u/∂z}（每格）。 */
+        public double vorticityPerBlock;
+        /** 水平散度 {@code δ = ∂u/∂x + ∂w/∂z}（每秒）。正为辐散、负为辐合。 */
+        public double divergencePerSecond;
         public double ablStability;      // <0 不稳定，>0 稳定
         public double ablMixingStrength;
         public double surfaceTempK;
         public double terrainHeight;
+        /** L0 透传的气压异常（Pa），API 层直接给出（L0-07 / API-07）。 */
+        public double pressureAnomalyPa;
         /**
          * 该列的地表粗糙元高度 z0 与廓线归一化分母。{@code sample()} 在最低层（2 格 AGL）以下
          * 直接按对数律求值，而不是把值夹成第 0 层（L1-01）。
@@ -83,17 +119,26 @@ public class MesoscaleGrid {
                                      double meanLowLevelShear, double meanHumidity,
                                      double maxPositiveMoistureConvergence) {}
 
+    /**
+     * 单点采样结果。
+     *
+     * @param shearPerBlock 0–1 km 矢量风切变（每格 m/s）。旧实现给的是正应变率（L1-03）。
+     * @param pressureAnomalyPa L0 透传的气压异常（Pa）。旧实现恒 0（L0-07 / API-07）。
+     */
     public record Sample(double windX, double windY, double windZ,
                          double turbulenceIntensity,
                          double gustX, double gustY, double gustZ,
                          double shearPerBlock,
                          double airTempK, double humidity01,
                          double pressureAnomalyPa,
-                         double ablStability, boolean sheltered) {}
+                         double ablStability, boolean sheltered,
+                         double vorticityPerBlock, double divergencePerSecond) {}
 
     private final CellColumn[][] columns = new CellColumn[SIZE][SIZE];
     private double focusBlockX, focusBlockZ;
     private long seed;
+    /** 域外采样回退用的 L0 网格（L1-02）：{@code refresh} 时挂上。 */
+    private BackgroundMetGrid background;
 
     public MesoscaleGrid(long seed) {
         this.seed = seed;
@@ -112,9 +157,13 @@ public class MesoscaleGrid {
 
     /**
      * 每 MESOSCALE_REFRESH_TICKS（64 tick）调用一次。
+     *
+     * @param dtSeconds 距上次刷新的真实秒数，阵风的冻结湍流图样要按它推进（L1-05）
      */
     public DiagnosticsSummary refresh(BackgroundMetGrid l0, TerrainProbe terrain,
-                                       double timeOfDay01, boolean raining, long tick) {
+                                       double timeOfDay01, boolean raining, long tick,
+                                       double dtSeconds) {
+        this.background = l0;
         double maxInstability = 0, maxLift = 0, shearSum = 0, humSum = 0, maxMoistConv = 0;
         int count = 0;
 
@@ -145,13 +194,16 @@ public class MesoscaleGrid {
                 double z0 = roughnessToZ0(roughness); // 粗糙元高度（m），由粗糙度映射
                 // 廓线归一化的分母只跟 ABL 顶与 z0 有关，逐层不变
                 double profDenom = Math.log((Math.max(ablHeight, z0 + 1) + z0) / z0);
+                // L0 是**自由大气/地转风**，是 ABL 顶的参考而不是地面风（L1-04）。
+                // 地面风相对它向低压偏转，随高度回正：t=1 在 h=0、t=0 在 h=ABL。
+                double ekmanSign = HemisphereConvention.coriolisSign();
                 for (int l = 0; l < MAX_LAYERS; l++) {
                     double hAboveGround = LAYER_AGL_BLOCKS[l];
                     double prof = profileFactor(hAboveGround, z0, profDenom);
-                    // 越往上风越大、偏转越多（Ekman 螺旋），到 ABL 顶收敛
-                    double ekmanTurn = ABL_EKMAN_MAX_TURN_RADIANS
-                            * clamp01(hAboveGround / ablHeight) * 0.9;
-                    double dir = dir0 + ekmanTurn;
+                    // 北半球地面风相对地转风逆时针（偏向低压），所以是 **减**；南半球取反
+                    double ekmanTurn = ABL_EKMAN_MAX_TURN_RADIANS * ekmanSign
+                            * Math.max(0.0, 1.0 - hAboveGround / ablHeight);
+                    double dir = dir0 - ekmanTurn;
                     double spd = speed0 * prof;
                     col.windX[l] = Math.cos(dir) * spd;
                     col.windZ[l] = Math.sin(dir) * spd;
@@ -163,6 +215,8 @@ public class MesoscaleGrid {
                 // 2 格以下的廓线参数：留到 sample() 里按对数律求值
                 col.profileZ0 = z0;
                 col.profileDenom = profDenom;
+                // 气压从 L0 透传（L0-07 / API-07）：旧实现 Sample 里恒写 0
+                col.pressureAnomalyPa = base.pressureAnomalyPa();
 
                 // 表层地形：迎风坡减速、坡面热力风、地形抬升。
                 // 强迫按 exp(-AGL/h_scale) 分配到各层，而不是只写第 0 层：
@@ -200,18 +254,13 @@ public class MesoscaleGrid {
                         + slopeMag * 1.2 + base.convEnv() * 0.5
                         + speed0 * 0.012 + col.ablMixingStrength * 0.2);
 
-                // 阵风：种子噪声，随 tick 慢慢变，别用纯随机（会闪）
-                double gustSeed = NoiseUtil.valueNoise2(bx * 0.01, bz * 0.01 + tick * 0.002, seed);
-                double gustAmp = (0.6 + speed0 * 0.22 + base.convEnv() * 3.0)
-                        * (1 + col.turbulenceIntensity);
-                col.gustX = (gustSeed - 0.5) * 2 * gustAmp * Math.cos(dir0);
-                col.gustZ = (gustSeed - 0.5) * 2 * gustAmp * Math.sin(dir0);
-                col.gustY = (NoiseUtil.valueNoise2(bx * 0.013 + 7.3, bz * 0.013, seed + tick / 20) - 0.5)
-                        * gustAmp * 0.5;
+                // 阵风：冻结湍流（Taylor 假设），见图样随平均风平移（L1-05）
+                computeGust(col, bx, bz, dir0, speed0, dtSeconds, seed);
 
-                // 水平风切变先置零，第二遍循环里再算（要用到邻居格）
-                col.shearXPerBlock = 0;
-                col.shearZPerBlock = 0;
+                // 散度/涡度/风切变在第二遍循环里算（要用邻居格与不同高度的层）
+                col.bulkShearPerBlock = 0;
+                col.vorticityPerBlock = 0;
+                col.divergencePerSecond = 0;
 
                 // 不稳定/举升代理
                 col.instabilityProxy = clamp01(-col.ablStability * 0.7 + base.convEnv()
@@ -225,29 +274,90 @@ public class MesoscaleGrid {
             }
         }
 
-        // 第二遍：风切变与水汽辐合
+        // 第二遍：风切变、涡度、散度、水汽辐合
+        //
+        // 旧实现把 du=∂u/∂x、dw=∂w/∂z 当"切变"（L1-03），那是正应变率。现在分开：
+        //   风切变 = |V(300 AGL) − V(2 AGL)| / Δz   ← 超级单体/龙卷要的量
+        //   涡度   = ∂w/∂x − ∂u/∂z
+        //   散度   = ∂u/∂x + ∂w/∂z                 ← 水汽辐合用它
+        double dzBulk = LAYER_AGL_BLOCKS[SHEAR_HIGH_LAYER] - LAYER_AGL_BLOCKS[SHEAR_LOW_LAYER];
+        double dzVert = LAYER_AGL_BLOCKS[SHEAR_VERTICAL_LAYER] - LAYER_AGL_BLOCKS[SHEAR_LOW_LAYER];
         for (int i = 1; i < SIZE - 1; i++) {
             for (int j = 1; j < SIZE - 1; j++) {
                 CellColumn c = columns[i][j];
-                double du = (columns[i + 1][j].windX[0] - columns[i - 1][j].windX[0])
-                        / (2 * CELL_SIZE_BLOCKS);
-                double dw = (columns[i][j + 1].windZ[0] - columns[i][j - 1].windZ[0])
-                        / (2 * CELL_SIZE_BLOCKS);
-                c.shearXPerBlock = du;
-                c.shearZPerBlock = dw;
-                shearSum += Math.hypot(du, dw);
-                double divergence = du + dw;
-                if (divergence < 0) {
-                    maxMoistConv = Math.max(maxMoistConv, -divergence * c.humidity01[0]);
+                double duDx = (columns[i + 1][j].windX[SHEAR_LOW_LAYER]
+                        - columns[i - 1][j].windX[SHEAR_LOW_LAYER]) / (2 * CELL_SIZE_BLOCKS);
+                double dwDz = (columns[i][j + 1].windZ[SHEAR_LOW_LAYER]
+                        - columns[i][j - 1].windZ[SHEAR_LOW_LAYER]) / (2 * CELL_SIZE_BLOCKS);
+                double dwDx = (columns[i + 1][j].windZ[SHEAR_LOW_LAYER]
+                        - columns[i - 1][j].windZ[SHEAR_LOW_LAYER]) / (2 * CELL_SIZE_BLOCKS);
+                double duDz = (c.windX[SHEAR_VERTICAL_LAYER] - c.windX[SHEAR_LOW_LAYER]) / dzVert;
+
+                double shearX = c.windX[SHEAR_HIGH_LAYER] - c.windX[SHEAR_LOW_LAYER];
+                double shearZ = c.windZ[SHEAR_HIGH_LAYER] - c.windZ[SHEAR_LOW_LAYER];
+                c.bulkShearPerBlock = Math.hypot(shearX, shearZ) / dzBulk;
+                c.vorticityPerBlock = dwDx - duDz;
+                c.divergencePerSecond = duDx + dwDz;
+                shearSum += c.bulkShearPerBlock;
+                if (c.divergencePerSecond < 0) {
+                    maxMoistConv = Math.max(maxMoistConv,
+                            -c.divergencePerSecond * c.humidity01[SHEAR_LOW_LAYER]);
                 }
             }
         }
+
+        // 连续方程补上层垂直速度（L1-06）：必须在第二遍散度算完之后
+        integrateContinuity();
 
         return new DiagnosticsSummary(maxInstability, maxLift,
                 count == 0 ? 0 : shearSum / count,
                 count == 0 ? 0.5 : humSum / count,
                 maxMoistConv);
     }
+
+    /**
+     * 连续方程补出的垂直速度（L1-06）。
+     *
+     * <p>旧实现把 {@code windY[l]} 硬写 0，只有第 0 层在坡风/对流处被加了一点，
+     * 于是"地面有上升气流、6 格处突然没有"——层间线性插值时垂直速度在 2 格处断崖。
+     *
+     * <p>真实边界层里水平辐合必然伴随上升：{@code ∂w/∂z = −(∂u/∂x + ∂w/∂z)} 从地面往上积分。
+     * 这里逐层用邻居列算水平散度、逐层积分，**叠加**在已有的坡风/对流强迫上——
+     * 那些是地形与浮力的显式源项，连续方程补的是"辐合必须抬升"这一约束。
+     */
+    private void integrateContinuity() {
+        for (int i = 1; i < SIZE - 1; i++) {
+            for (int j = 1; j < SIZE - 1; j++) {
+                CellColumn c = columns[i][j];
+                double w = 0;
+                for (int l = 1; l < MAX_LAYERS; l++) {
+                    double duDx = (columns[i + 1][j].windX[l] - columns[i - 1][j].windX[l])
+                            / (2 * CELL_SIZE_BLOCKS);
+                    double dwDz = (columns[i][j + 1].windZ[l] - columns[i][j - 1].windZ[l])
+                            / (2 * CELL_SIZE_BLOCKS);
+                    double dz = LAYER_AGL_BLOCKS[l] - LAYER_AGL_BLOCKS[l - 1];
+                    w -= (duDx + dwDz) * dz;
+                    w = clamp(w, -MAX_CONTINUITY_W_MPS, MAX_CONTINUITY_W_MPS);
+                    c.windY[l] = clamp(c.windY[l] + CONTINUITY_COUPLING * w,
+                            -MAX_CONTINUITY_W_MPS, MAX_CONTINUITY_W_MPS);
+                }
+            }
+        }
+    }
+
+    /**
+     * 单列垂直插值结果（可复用，避免每次采样 4 次 {@code new double[11]}）。
+     */
+    private static final class LayerSample {
+        double windX, windY, windZ, tempK, humidity;
+        double turbulence, gustX, gustY, gustZ;
+        double shear, stability, pressureAnomalyPa, vorticity, divergence;
+    }
+
+    private final LayerSample scratchA = new LayerSample();
+    private final LayerSample scratchB = new LayerSample();
+    private final LayerSample scratchC = new LayerSample();
+    private final LayerSample scratchD = new LayerSample();
 
     /**
      * 三维采样（方块坐标，y 为绝对高度）。
@@ -257,38 +367,71 @@ public class MesoscaleGrid {
      * 而层是按绝对高度铺的——平地上 64–144 格全落进第 0→1 层，
      * 系数恒为 0.2775，与粗糙度/稳定度/坡度无关（L1-01）。
      *
+     * <p>域外（网格 ±1024 格之外）不再把边缘格的值硬夹出去（L1-02 / SYS-05），
+     * 而是按"出界距离"在 0..512 格内淡到 0：调用方看到的是一段平滑过渡，
+     * 而不是一整片随风平移到天边的假风。
+     *
      * @return 层顶以上不再插值，返回顶层的值（≈ 自由大气 L0，廓线系数已收敛到 1）
      */
     public Sample sample(double blockX, double blockY, double blockZ) {
-        double fi = clamp((blockX - focusBlockX) / CELL_SIZE_BLOCKS + RADIUS_CELLS, 0, SIZE - 1);
-        double fj = clamp((blockZ - focusBlockZ) / CELL_SIZE_BLOCKS + RADIUS_CELLS, 0, SIZE - 1);
+        double fiRaw = (blockX - focusBlockX) / CELL_SIZE_BLOCKS + RADIUS_CELLS;
+        double fjRaw = (blockZ - focusBlockZ) / CELL_SIZE_BLOCKS + RADIUS_CELLS;
+        double fi = clamp(fiRaw, 0, SIZE - 1);
+        double fj = clamp(fjRaw, 0, SIZE - 1);
         int i0 = clamp((int) Math.floor(fi), 0, SIZE - 2);
         int j0 = clamp((int) Math.floor(fj), 0, SIZE - 2);
         int i1 = i0 + 1, j1 = j0 + 1;
         double fx = clamp01(fi - i0), fz = clamp01(fj - j0);
 
-        // 4 个角列各自的垂直插值结果
-        double[] a = columnSample(columns[i0][j0], blockY);
-        double[] b = columnSample(columns[i1][j0], blockY);
-        double[] c = columnSample(columns[i0][j1], blockY);
-        double[] d = columnSample(columns[i1][j1], blockY);
+        // 4 个角列各自的垂直插值结果（写进复用对象）
+        LayerSample a = columnSample(columns[i0][j0], blockY, scratchA);
+        LayerSample b = columnSample(columns[i1][j0], blockY, scratchB);
+        LayerSample c = columnSample(columns[i0][j1], blockY, scratchC);
+        LayerSample d = columnSample(columns[i1][j1], blockY, scratchD);
 
-        double windX = lerp(lerp(a[0], b[0], fx), lerp(c[0], d[0], fx), fz);
-        double windY = lerp(lerp(a[1], b[1], fx), lerp(c[1], d[1], fx), fz);
-        double windZ = lerp(lerp(a[2], b[2], fx), lerp(c[2], d[2], fx), fz);
-        double tempK = lerp(lerp(a[3], b[3], fx), lerp(c[3], d[3], fx), fz);
-        double hum = lerp(lerp(a[4], b[4], fx), lerp(c[4], d[4], fx), fz);
-        double turb = lerp(lerp(a[5], b[5], fx), lerp(c[5], d[5], fx), fz);
-        double gX = lerp(lerp(a[6], b[6], fx), lerp(c[6], d[6], fx), fz);
-        double gY = lerp(lerp(a[7], b[7], fx), lerp(c[7], d[7], fx), fz);
-        double gZ = lerp(lerp(a[8], b[8], fx), lerp(c[8], d[8], fx), fz);
-        double shear = lerp(lerp(a[9], b[9], fx), lerp(c[9], d[9], fx), fz);
-        double stab = lerp(lerp(a[10], b[10], fx), lerp(c[10], d[10], fx), fz);
+        double windX = bilerp(a.windX, b.windX, c.windX, d.windX, fx, fz);
+        double windY = bilerp(a.windY, b.windY, c.windY, d.windY, fx, fz);
+        double windZ = bilerp(a.windZ, b.windZ, c.windZ, d.windZ, fx, fz);
+        double tempK = bilerp(a.tempK, b.tempK, c.tempK, d.tempK, fx, fz);
+        double hum = bilerp(a.humidity, b.humidity, c.humidity, d.humidity, fx, fz);
+        double turb = bilerp(a.turbulence, b.turbulence, c.turbulence, d.turbulence, fx, fz);
+        double gX = bilerp(a.gustX, b.gustX, c.gustX, d.gustX, fx, fz);
+        double gY = bilerp(a.gustY, b.gustY, c.gustY, d.gustY, fx, fz);
+        double gZ = bilerp(a.gustZ, b.gustZ, c.gustZ, d.gustZ, fx, fz);
+        double shear = bilerp(a.shear, b.shear, c.shear, d.shear, fx, fz);
+        double stab = bilerp(a.stability, b.stability, c.stability, d.stability, fx, fz);
+        double pressure = bilerp(a.pressureAnomalyPa, b.pressureAnomalyPa,
+                c.pressureAnomalyPa, d.pressureAnomalyPa, fx, fz);
+        double vorticity = bilerp(a.vorticity, b.vorticity, c.vorticity, d.vorticity, fx, fz);
+        double divergence = bilerp(a.divergence, b.divergence, c.divergence, d.divergence, fx, fz);
+
+        // 域外回退 L0（L1-02 / SYS-05）：旧实现把边缘格的值硬夹出去，等于让整片域外
+        // 都吹"边界那一格"的风。现在按出界距离 0..512 格从 L1 淡到 L0 的自由大气风。
+        double outsideCells = Math.max(Math.max(0, -fiRaw), Math.max(0, fiRaw - (SIZE - 1)));
+        double outsideZCells = Math.max(Math.max(0, -fjRaw), Math.max(0, fjRaw - (SIZE - 1)));
+        double outsideBlocks = Math.max(outsideCells, outsideZCells) * CELL_SIZE_BLOCKS;
+        if (outsideBlocks > 0 && background != null) {
+            double keep = clamp01(1.0 - outsideBlocks / OUTSIDE_FADE_BLOCKS);
+            BackgroundMetGrid.Sample l0s = background.sample(blockX, blockZ);
+            windX = lerp(l0s.windX(), windX, keep);
+            windZ = lerp(l0s.windZ(), windZ, keep);
+            windY *= keep;
+            gX = lerp(0, gX, keep);
+            gY = lerp(0, gY, keep);
+            gZ = lerp(0, gZ, keep);
+            turb = lerp(0.08, turb, keep);
+            pressure = lerp(l0s.pressureAnomalyPa(), pressure, keep);
+            tempK = lerp(l0s.airTempK(), tempK, keep);
+            hum = lerp(l0s.humidity01(), hum, keep);
+            shear *= keep;
+            vorticity *= keep;
+            divergence *= keep;
+        }
 
         // 地面遮蔽：只对真的钻到地形以下的点生效。旧实现额外乘 0.6，
         // 与对数廓线自身的近地衰减叠加，把眼高风压到 L0 的 0.17（L1-01）。
-        double terrainHere = lerp(lerp(columns[i0][j0].terrainHeight, columns[i1][j0].terrainHeight, fx),
-                lerp(columns[i0][j1].terrainHeight, columns[i1][j1].terrainHeight, fx), fz);
+        double terrainHere = bilerp(columns[i0][j0].terrainHeight, columns[i1][j0].terrainHeight,
+                columns[i0][j1].terrainHeight, columns[i1][j1].terrainHeight, fx, fz);
         double hAboveGround = blockY - terrainHere;
         boolean sheltered = false;
         if (hAboveGround < 0.0) {
@@ -301,32 +444,42 @@ public class MesoscaleGrid {
 
         return new Sample(windX, windY, windZ,
                 turb, gX, gY, gZ,
-                shear, tempK, hum, 0, stab, sheltered);
+                shear, tempK, hum, pressure, stab, sheltered, vorticity, divergence);
     }
 
     /**
-     * 单列的垂直插值：按 AGL 在 8 层之间线性插值，返回
-     * {@code [windX, windY, windZ, tempK, humidity, turbulence, gustX, gustY, gustZ, shear, ablStability]}。
+     * 单列垂直插值：按 AGL 在 8 层之间线性插值，写进 {@code out}。
+     *
+     * <p>低层（2 格 AGL 以下）按同一套对数律直接求值；层顶以上视为自由大气。
      */
-    private static double[] columnSample(CellColumn c, double blockY) {
+    private static LayerSample columnSample(CellColumn c, double blockY, LayerSample out) {
         double hAgl = blockY - c.terrainHeight;
-        int la, lb;
-        double t;
+        out.turbulence = c.turbulenceIntensity;
+        out.gustX = c.gustX;
+        out.gustY = c.gustY;
+        out.gustZ = c.gustZ;
+        out.shear = c.bulkShearPerBlock;
+        out.stability = c.ablStability;
+        out.pressureAnomalyPa = c.pressureAnomalyPa;
+        out.vorticity = c.vorticityPerBlock;
+        out.divergence = c.divergencePerSecond;
+
         if (hAgl < LAYER_AGL_BLOCKS[0]) {
             // 最低层中心（2 格）以下：按同一套对数律直接求值，而不是夹成第 0 层的值。
             // 夹值会让 1.6 格眼高只有 0.336×L0，而真实廓线是 0.41×L0（L1-01）。
             double ratio = profileFactor(hAgl, c.profileZ0, c.profileDenom)
                     / Math.max(1e-6, profileFactor(LAYER_AGL_BLOCKS[0], c.profileZ0, c.profileDenom));
-            ratio = Math.max(0.0, Math.min(1.0, ratio));
-            return new double[]{
-                    c.windX[0] * ratio, c.windY[0] * ratio, c.windZ[0] * ratio,
-                    c.temperatureK[0], c.humidity01[0],
-                    c.turbulenceIntensity,
-                    c.gustX, c.gustY, c.gustZ,
-                    Math.hypot(c.shearXPerBlock, c.shearZPerBlock),
-                    c.ablStability
-            };
+            ratio = clamp01(ratio);
+            out.windX = c.windX[0] * ratio;
+            out.windY = c.windY[0] * ratio;
+            out.windZ = c.windZ[0] * ratio;
+            out.tempK = c.temperatureK[0];
+            out.humidity = c.humidity01[0];
+            return out;
         }
+
+        int la, lb;
+        double t;
         if (hAgl >= LAYER_AGL_BLOCKS[MAX_LAYERS - 1]) {
             la = lb = MAX_LAYERS - 1; t = 0;          // 层顶以上：自由大气
         } else {
@@ -336,17 +489,49 @@ public class MesoscaleGrid {
             lb = l + 1;
             t = (hAgl - LAYER_AGL_BLOCKS[la]) / (LAYER_AGL_BLOCKS[lb] - LAYER_AGL_BLOCKS[la]);
         }
-        return new double[]{
-                lerp(c.windX[la], c.windX[lb], t),
-                lerp(c.windY[la], c.windY[lb], t),
-                lerp(c.windZ[la], c.windZ[lb], t),
-                lerp(c.temperatureK[la], c.temperatureK[lb], t),
-                lerp(c.humidity01[la], c.humidity01[lb], t),
-                c.turbulenceIntensity,
-                c.gustX, c.gustY, c.gustZ,
-                Math.hypot(c.shearXPerBlock, c.shearZPerBlock),
-                c.ablStability
-        };
+        out.windX = lerp(c.windX[la], c.windX[lb], t);
+        out.windY = lerp(c.windY[la], c.windY[lb], t);
+        out.windZ = lerp(c.windZ[la], c.windZ[lb], t);
+        out.tempK = lerp(c.temperatureK[la], c.temperatureK[lb], t);
+        out.humidity = lerp(c.humidity01[la], c.humidity01[lb], t);
+        return out;
+    }
+
+    private static double bilerp(double a, double b, double c, double d, double fx, double fz) {
+        return lerp(lerp(a, b, fx), lerp(c, d, fx), fz);
+    }
+
+    /**
+     * 阵风：**冻结湍流**（Taylor 假设），`L1-05`。
+     *
+     * <p>旧实现三个问题：① {@code gustY} 的种子含 {@code tick/20}，但列每 64 tick 才刷新一次，
+     * 垂直阵风每次刷新完全重采样（会闪）；② {@code gustX/Z} 只沿平均风方向，没有横向分量；
+     * ③ {@code gustAmp} 读的是**上一次**刷新的 {@code turbulenceIntensity}。
+     *
+     * <p>现在：噪声在"沿风向平移的坐标系"里求值——`x' = (x − U·t)/L`，即湍流涡以平均风速整体
+     * 平移，采样点经过时看到的阵风是同一张图样，不会在 3.2 s 边界上跳变。纵向 + 横向各一个
+     * 分量，幅度用本次刚算出的 {@code turbulenceIntensity}。
+     *
+     * <p>{@code gustPhaseX/Z} 累积"图样随平均风走了多远"：刷新间隔不固定时（RT-03 后按真实
+     * 墙钟累积），相位也必须按累积位移推进。
+     */
+    private static void computeGust(CellColumn col, double bx, double bz,
+                                    double dir0, double speed0, double dtSeconds, long seed) {
+        col.gustPhaseX += Math.cos(dir0) * speed0 * dtSeconds / GUST_LENGTH_SCALE_BLOCKS;
+        col.gustPhaseZ += Math.sin(dir0) * speed0 * dtSeconds / GUST_LENGTH_SCALE_BLOCKS;
+        double nx = bx / GUST_LENGTH_SCALE_BLOCKS - col.gustPhaseX;
+        double nz = bz / GUST_LENGTH_SCALE_BLOCKS - col.gustPhaseZ;
+        double along = (NoiseUtil.valueNoise2(nx, nz, seed) - 0.5) * 2.0;
+        double cross = (NoiseUtil.valueNoise2(nx + 31.7, nz - 17.3, seed + 991) - 0.5) * 2.0;
+        double vertical = (NoiseUtil.valueNoise2(nx + 7.9, nz + 53.1, seed + 1777) - 0.5) * 2.0;
+
+        double amp = (0.6 + speed0 * 0.22) * (0.6 + col.turbulenceIntensity * 1.6);
+        double ux = Math.cos(dir0), uz = Math.sin(dir0);
+        double tx = -uz, tz = ux; // 横向（左手）
+
+        col.gustX = amp * (along * ux + cross * GUST_CROSS_WEIGHT * tx);
+        col.gustZ = amp * (along * uz + cross * GUST_CROSS_WEIGHT * tz);
+        col.gustY = amp * vertical * 0.4;
     }
 
     private static double lerp(double a, double b, double t) { return a + (b - a) * t; }

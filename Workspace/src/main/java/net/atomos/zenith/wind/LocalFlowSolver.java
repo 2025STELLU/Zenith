@@ -12,8 +12,16 @@ import java.util.List;
  *   热浮力：熔岩/火焰/火把/营火/风扇加热之类的热源顶出一股上升气流；
  *   风扇/风道：定向射流。
  * 求解器无状态，逐点诊断；玩法和视觉的采样都走这里。
+ *
+ * <p><b>边界</b>：9³ 扫描半径 {@link #SCAN_RADIUS} 处不再是硬截断，而是用
+ * {@link NestedBoundaryCoupler} 的海绵层把修正量平滑收敛回 L1 基流（L2-05）。
  */
 public class LocalFlowSolver {
+    /** 9³ 扫描半径（格）。格子数再大性能顶不住，再小绕流不准。 */
+    public static final int SCAN_RADIUS = 4;
+    /** 海绵层厚度（格）：从 {@code R−1.5} 到 {@code R} 把修正量淡出到 0。 */
+    private static final double SPONGE_LAYERS_BLOCKS = 1.5;
+
     public interface ObstacleProbe {
         boolean isSolid(int x, int y, int z);
     }
@@ -45,7 +53,10 @@ public class LocalFlowSolver {
     }
 
     public record LocalFlow(double modX, double modY, double modZ,
-                            boolean sheltered, double confidence) {}
+                            boolean sheltered, double confidence) {
+        /** 不做 L2 时的空修正（{@code SERVER_COARSE_ONLY} 等低成本策略用）。 */
+        public static final LocalFlow NONE = new LocalFlow(0, 0, 0, false, 1.0);
+    }
 
     private final ObstacleProbe obstacles;
     private final HeatProbe heat;
@@ -76,12 +87,14 @@ public class LocalFlowSolver {
                            double baseX, double baseY, double baseZ) {
         double modX = 0, modY = 0, modZ = 0;
         boolean sheltered = false;
+        // 置信度（L2-05）：1 = 9³ 扫描完整、地面信息齐全；未加载区块/越界会拉低
+        double confidence = 1.0;
 
         // 障碍物绕流
         double baseSpeed = Math.sqrt(sqr(baseX) + sqr(baseZ));
         if (baseSpeed > 0.05) {
             double dirX = baseX / baseSpeed, dirZ = baseZ / baseSpeed;
-            int r = 4; // 9³ 扫描：格子数再大性能顶不住，再小绕流不准
+            int r = SCAN_RADIUS;
             int bx = (int) Math.floor(x), by = (int) Math.floor(y), bz = (int) Math.floor(z);
 
             // 局地地面：5×5 的最小值。地面是"支撑面"不是障碍物，
@@ -89,17 +102,24 @@ public class LocalFlowSolver {
             int groundY = Integer.MIN_VALUE;
             if (ground != null) {
                 int best = Integer.MAX_VALUE;
+                int known = 0;
                 for (int gx = -2; gx <= 2; gx++)
                     for (int gz = -2; gz <= 2; gz++) {
                         int gy = ground.groundY(bx + gx, bz + gz);
                         // MIN_VALUE = 该列未知/未加载：跳过，别让一列未加载把整片探针废掉
-                        if (gy != Integer.MIN_VALUE) best = Math.min(best, gy);
+                        if (gy != Integer.MIN_VALUE) { best = Math.min(best, gy); known++; }
                     }
                 groundY = best;
+                // 地面信息覆盖率直接进置信度：25 列全未知时只有 0.5
+                confidence *= 0.5 + 0.5 * (known / 25.0);
+            } else {
+                // 没有地面探针 → 退回"所有固体都是障碍"，平地会有伪上升（L2-01）
+                confidence *= 0.5;
             }
 
             double pushX = 0, pushY = 0, pushZ = 0;
             double wakeX = 0, wakeZ = 0;
+            int edgeClipped = 0, solidSeen = 0;
             for (int dx = -r; dx <= r; dx++)
                 for (int dy = -r; dy <= r; dy++)
                     for (int dz = -r; dz <= r; dz++) {
@@ -107,6 +127,7 @@ public class LocalFlowSolver {
                         // 地面及以下一律不算障碍：脚下那层地砖不是"绕流物体"
                         if (sy <= groundY) continue;
                         if (!obstacles.isSolid(bx + dx, sy, bz + dz)) continue;
+                        solidSeen++;
                         double px = x - (bx + dx + 0.5);
                         double py = y - (sy + 0.5);
                         double pz = z - (bz + dz + 0.5);
@@ -115,9 +136,13 @@ public class LocalFlowSolver {
                             sheltered = true;
                             continue;
                         }
-                        // 扫描边缘的窗函数：避免 9³ 边界上的硬切（0.6r 内权重=1，之后 smoothstep 收敛到 0）
-                        double edge = smoothstep((r + 0.5 - Math.sqrt(dx * dx + dy * dy + dz * dz)) / 1.5);
-                        if (edge <= 0) continue;
+                        // 扫描边缘的海绵层（L2-05）：用 NestedBoundaryCoupler 的二次过渡
+                        // 把修正量在 r 处收敛回 L1 基流，而不是在 9³ 边界上硬切。
+                        double edgeDistBlocks = Math.sqrt(dx * dx + dy * dy + dz * dz);
+                        double eta = NestedBoundaryCoupler.spongeBlend(
+                                edgeDistBlocks, r + 0.5, SPONGE_LAYERS_BLOCKS);
+                        double edge = 1.0 - eta;
+                        if (edge <= 0) { edgeClipped++; continue; }
 
                         double d = Math.sqrt(d2);
                         double push = Math.min(1.2, 1.0 / d2) * baseSpeed * 0.35 * edge;
@@ -138,6 +163,8 @@ public class LocalFlowSolver {
                             }
                         }
                     }
+            // 被海绵层裁掉的比例也进置信度（L2-05）：占比越高说明细节切得越多
+            if (solidSeen > 0) confidence *= 1.0 - 0.3 * ((double) edgeClipped / solidSeen);
 
             // 两项分别限幅：旧实现把 729 格贡献直接相加，平地也能凑出 11 m/s（L2-01）
             double pushCap = 0.5 * baseSpeed;
@@ -192,7 +219,8 @@ public class LocalFlowSolver {
             modZ += jet.dirZ() * s;
         }
 
-        return new LocalFlow(modX, modY, modZ, sheltered, 1.0);
+        return new LocalFlow(modX, modY, modZ, sheltered,
+                Math.max(0.0, Math.min(1.0, confidence)));
     }
 
     private static double sqr(double v) { return v * v; }
