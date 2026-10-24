@@ -1,0 +1,12 @@
+{
+  "parent": "minecraft:block/cube",
+  "textures": {
+    "particle": "zenith:block/wind_vane",
+    "down": "zenith:block/wind_vane",
+    "up": "zenith:block/wind_vane",
+    "north": "zenith:block/wind_vane",
+    "south": "zenith:block/wind_vane",
+    "west": "zenith:block/wind_vane",
+    "east": "zenith:block/wind_vane"
+  }
+}

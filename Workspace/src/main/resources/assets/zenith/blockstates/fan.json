@@ -1,0 +1,28 @@
+{
+  "variants": {
+    "facing=down,speed=0":  { "model": "zenith:block/fan", "x": 90 },
+    "facing=down,speed=1":  { "model": "zenith:block/fan", "x": 90 },
+    "facing=down,speed=2":  { "model": "zenith:block/fan", "x": 90 },
+    "facing=down,speed=3":  { "model": "zenith:block/fan", "x": 90 },
+    "facing=up,speed=0":    { "model": "zenith:block/fan", "x": 270 },
+    "facing=up,speed=1":    { "model": "zenith:block/fan", "x": 270 },
+    "facing=up,speed=2":    { "model": "zenith:block/fan", "x": 270 },
+    "facing=up,speed=3":    { "model": "zenith:block/fan", "x": 270 },
+    "facing=north,speed=0": { "model": "zenith:block/fan" },
+    "facing=north,speed=1": { "model": "zenith:block/fan" },
+    "facing=north,speed=2": { "model": "zenith:block/fan" },
+    "facing=north,speed=3": { "model": "zenith:block/fan" },
+    "facing=south,speed=0": { "model": "zenith:block/fan", "y": 180 },
+    "facing=south,speed=1": { "model": "zenith:block/fan", "y": 180 },
+    "facing=south,speed=2": { "model": "zenith:block/fan", "y": 180 },
+    "facing=south,speed=3": { "model": "zenith:block/fan", "y": 180 },
+    "facing=west,speed=0":  { "model": "zenith:block/fan", "y": 270 },
+    "facing=west,speed=1":  { "model": "zenith:block/fan", "y": 270 },
+    "facing=west,speed=2":  { "model": "zenith:block/fan", "y": 270 },
+    "facing=west,speed=3":  { "model": "zenith:block/fan", "y": 270 },
+    "facing=east,speed=0":  { "model": "zenith:block/fan", "y": 90 },
+    "facing=east,speed=1":  { "model": "zenith:block/fan", "y": 90 },
+    "facing=east,speed=2":  { "model": "zenith:block/fan", "y": 90 },
+    "facing=east,speed=3":  { "model": "zenith:block/fan", "y": 90 }
+  }
+}

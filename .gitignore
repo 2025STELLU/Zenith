@@ -1,0 +1,10 @@
+# 构建与 IDE 产物
+Workspace/.gradle/
+Workspace/build/
+Workspace/run/
+Workspace/.idea/
+*.iml
+*.log
+
+# 审计临时文件
+.tmp*.md

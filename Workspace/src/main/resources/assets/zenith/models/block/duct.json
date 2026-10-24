@@ -1,0 +1,12 @@
+{
+  "parent": "minecraft:block/cube",
+  "textures": {
+    "particle": "zenith:block/duct_side",
+    "down": "zenith:block/duct_end",
+    "up": "zenith:block/duct_end",
+    "north": "zenith:block/duct_end",
+    "south": "zenith:block/duct_end",
+    "west": "zenith:block/duct_side",
+    "east": "zenith:block/duct_side"
+  }
+}
