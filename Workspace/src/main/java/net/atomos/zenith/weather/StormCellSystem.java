@@ -86,7 +86,13 @@ public class StormCellSystem implements WeatherPhenomenon {
             c.x = ax;
             c.z = az;
             c.groundY = groundY;
-            c.radiusBlocks = 60 + random.nextDouble() * 60;
+            // 半径由环境决定，不再纯随机（WX-SC-05）：
+            //   大尺度强迫 stormActivity 决定"能撑多大"，低层湿度是 CAPE 的代理，
+            //   两者各占一半权重；随机量只作 ±10 格的抖动（同一天气下单体大小仍有差异，
+            //   但干燥/弱强迫环境不会再抽出一个 120 格的巨型单体）。
+            double capeProxy = clamp01((l1s.humidity01() - 0.45) / 0.45);
+            double size01 = clamp01(0.5 * clamp01(stormAct) + 0.5 * capeProxy);
+            c.radiusBlocks = 50 + size01 * 60 + (random.nextDouble() - 0.5) * 20;
             c.moveX = l1s.windX() * 0.6;
             c.moveZ = l1s.windZ() * 0.6;
             cells.add(c);
