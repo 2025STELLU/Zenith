@@ -1,8 +1,16 @@
 #!/usr/bin/env python3
-"""生成 Zenith 占位贴图（16x16 方块/物品，8x8 粒子），纯标准库写 PNG。"""
-import os, zlib, struct, math, random
+"""生成 Zenith 占位贴图（16x16 方块/物品，8x8 粒子），纯标准库写 PNG。
 
-ROOT = os.path.expanduser("~/workspace/zenith/src/main/resources/assets/zenith/textures")
+用法：直接运行，无需参数。输出目录固定为脚本所在仓库的
+`src/main/resources/assets/zenith/textures`，因此在任何机器/CI 上都能跑（ENG-05）。
+"""
+import os, zlib, struct, math, random
+from pathlib import Path
+
+# ENG-05：旧实现是 os.path.expanduser("~/workspace/zenith/...")，在 CI 或别的机器上
+# 会写到 $HOME/workspace/zenith/... （不存在的目录），而且和仓库位置无关。
+# 现在以脚本自身位置为锚点：tools/ 的上一级就是模组工程根。
+ROOT = Path(__file__).resolve().parent.parent / "src/main/resources/assets/zenith/textures"
 random.seed(20261006)
 
 def write_png(path, w, h, pixels):

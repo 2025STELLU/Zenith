@@ -33,6 +33,12 @@ public final class ClientWindState implements ZenithClientWindRuntimeProvider {
 
     private volatile CoarseWindPacket coarseWind;
     private volatile WeatherSnapshotPacket snapshot;
+    /**
+     * 客户端 tick 计数（CLI-12）：三个可视化控制器各自维护 {@code static int tickCounter}
+     * 时，重连/换世界不会清零，{@code % 20} 的相位会漂到任意值。这里集中一份，
+     * {@link #onLogout} 归零。
+     */
+    private long tickCounter;
     /** 上次看到的维度：只在维度真的变了时才清空，死亡同维度重生不清 */
     private volatile ResourceKey<Level> lastDimension;
     /** 当前粗风场帧是否带非零现象层（API-11 的 layer 标记用）。 */
@@ -127,6 +133,7 @@ public final class ClientWindState implements ZenithClientWindRuntimeProvider {
     @SubscribeEvent
     public static void onLogout(ClientPlayerNetworkEvent.LoggingOut event) {
         clear();
+        resetTickCounter(); // CLI-12: reconnect starts phase at 0
         INSTANCE.lastDimension = null; // 下次进服当新维度处理
     }
 
@@ -139,6 +146,21 @@ public final class ClientWindState implements ZenithClientWindRuntimeProvider {
             clear();
         }
         INSTANCE.lastDimension = dim;
+    }
+
+    /** 客户端 tick 计数（CLI-12），断开连接时归零。 */
+    public long tickCounter() {
+        return tickCounter;
+    }
+
+    /** 每客户端 tick 自增一次；返回自增后的值。 */
+    public long advanceTick() {
+        return ++tickCounter;
+    }
+
+    /** 玩家/世界相关的临时状态复位（CLI-12）：重连后相位从 0 开始。 */
+    public static void resetTickCounter() {
+        INSTANCE.tickCounter = 0;
     }
 
     public CoarseWindPacket coarseWind() {
@@ -264,6 +286,48 @@ public final class ClientWindState implements ZenithClientWindRuntimeProvider {
     public List<WeatherSnapshotPacket.TornadoInfo> tornadoes() {
         WeatherSnapshotPacket s = snapshot;
         return s == null ? List.of() : s.tornadoes();
+    }
+
+    /** 台风/雷暴/龙卷对玩家"风暴感"的影响半径（格）。 */
+    public static final double STORM_INFLUENCE_BLOCKS = 400.0;
+
+    /**
+     * 某点处的"风暴感" [0,1]（CLI-13）。
+     *
+     * <p>旧实现（{@code WeatherWindController} / {@code ParticleWindController} 各写一份）
+     * 是 {@code snap.typhoons().isEmpty() ? 0 : 0.8}——地图上任意一个台风，哪怕在 5000 格外，
+     * 也把玩家的风暴感拉到 0.8，于是晴天下雨丝/沙尘照样拉满。
+     *
+     * <p>这里改成按距离衰减：雷暴用自身 {@code radiusBlocks × 2} 作衰减半径（风暴单体的
+     * 外流能吹到两倍半径外），台风/龙卷用固定 {@link #STORM_INFLUENCE_BLOCKS}
+     * （眼墙只有 55 格，但雨带宽得多，400 格是"能感觉到"的尺度）。取所有现象的最大值，
+     * 并至少保留服务端给的整体 {@code stormActivity}。
+     */
+    public double stormBoostAt(double x, double z) {
+        WeatherSnapshotPacket s = snapshot;
+        if (s == null) return 0;
+        double best = s.stormActivity();
+        for (var storm : s.storms()) {
+            double dx = storm.x() - x, dz = storm.z() - z;
+            double d = Math.sqrt(dx * dx + dz * dz);
+            double r = Math.max(1.0, storm.radiusBlocks() * 2.0);
+            double g = d <= r ? 1.0 : Math.max(0.0, 1.0 - (d - r) / r);
+            // 成熟期比发展/消散期更有"风暴感"
+            best = Math.max(best, g * (0.6 + 0.4 * storm.phaseOrdinal() / 2.0));
+        }
+        for (var t : s.typhoons()) {
+            double dx = t.x() - x, dz = t.z() - z;
+            double d = Math.sqrt(dx * dx + dz * dz);
+            double g = d >= STORM_INFLUENCE_BLOCKS ? 0.0 : 1.0 - d / STORM_INFLUENCE_BLOCKS;
+            best = Math.max(best, g * 0.8 * t.intensity01());
+        }
+        for (var t : s.tornadoes()) {
+            double dx = t.x() - x, dz = t.z() - z;
+            double d = Math.sqrt(dx * dx + dz * dz);
+            double g = d >= STORM_INFLUENCE_BLOCKS ? 0.0 : 1.0 - d / STORM_INFLUENCE_BLOCKS;
+            best = Math.max(best, g * t.intensity01());
+        }
+        return Math.min(1.0, best);
     }
 
     private static double clamp01(double v) { return v < 0 ? 0 : Math.min(v, 1); }

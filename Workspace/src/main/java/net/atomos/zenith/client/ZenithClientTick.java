@@ -13,6 +13,8 @@ public final class ZenithClientTick {
 
     @SubscribeEvent
     public static void onClientTick(ClientTickEvent.Post event) {
+        // CLI-12：集中 tick 计数，断线归零（三个控制器共用同一相位）
+        ClientWindState.get().advanceTick();
         ParticleWindController.clientTick();
         WeatherWindController.clientTick();
         ZenithVisualizer.clientTick();

@@ -117,7 +117,12 @@ public class SailboatEntity extends Entity {
     @Override
     public void tick() {
         super.tick();
-        // 受击晃动和伤害随时间衰减（原版船就这么干的）
+        // 受击晃动和伤害随时间衰减。
+        // 这不是"照抄原版船"的实现细节：原版 {@code Boat} 在 {@code tick()} 里自己写这两行
+        // （{@code getHurtTime() > 0 → setHurtTime(-1)}、{@code getDamage() > 0 → setDamage(-1)}），
+        // 但它继承的是 {@code VehicleEntity}，那几个 setter/getter 是 VehicleEntity 的 public 方法。
+        // 本实体直接继承 {@code Entity}（不是 VehicleEntity），所以同步字段、衰减、阈值判定
+        // 都必须在自己的 tick 里重做一遍——这是等价复刻，不是调用原版代码（ENG-06）。
         if (getHurtTime() > 0) setHurtTime(getHurtTime() - 1);
         if (getDamage() > 0) setDamage(getDamage() - 1.0f);
         if (level().isClientSide) {
@@ -270,7 +275,16 @@ public class SailboatEntity extends Entity {
     @Override
     public boolean isPickable() { return true; }
 
-    // 受击：照抄原版船的逻辑——伤害累积，攒够了才拆，创造模式不掉东西
+    /**
+     * 受击：与 {@code VehicleEntity#hurt} 的语义对齐——伤害累积，攒够了才拆，
+     * 创造模式不掉东西。
+     *
+     * <p>为什么不是直接调 {@code super.hurt}：本实体继承的是 {@code Entity} 而不是
+     * {@code VehicleEntity}（后者的 {@code destroy(DamageSource)} / {@code getDropItem()}
+     * 是 abstract，且 {@code shouldSourceDestroy} 是包私有），所以这一段是**等价复刻**，
+     * 不是"原版就是这样调用的"（ENG-06）。原版的判定是 {@code damage > 40} 才拆，
+     * 这里用 {@link #BREAK_DAMAGE} 表达同一个阈值。
+     */
     @Override
     public boolean hurt(DamageSource source, float amount) {
         if (level().isClientSide || isRemoved()) return true;

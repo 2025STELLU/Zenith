@@ -313,9 +313,23 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
     }
 
     /**
-     * 存档关闭：维度状态里 pin 着旧 ServerLevel（地形适配器、L2 lambda 都引着它），
-     * 射流表是 JVM 级静态的。两处都必须清，否则下个存档同名维度会复用旧状态，
-     * 旧世界还会被 pin 住无法 GC；单人下集成服务器停了，客户端那份也一起清。
+     * 存档关闭：清掉所有维度状态与 JVM 级静态的射流表（ENG-06：这里给出具体引用，
+     * 不再只写"会 pin 住 ServerLevel"这种无法验证的断言）。
+     *
+     * <p>确实持有 {@link ServerLevel} 引用的地方：
+     * <ul>
+     *   <li>{@link McTerrainAdapter#level}（地形探针）；</li>
+     *   <li>{@link DimensionState#l2} 构造时传入的三个 lambda：障碍物探针捕获
+     *       {@code level}、地面探针捕获 {@code s.terrainAdapter}、热源探针捕获
+     *       {@link DimensionState#heat}（后者又持有 {@code this::heatPowerOf}）。</li>
+     * </ul>
+     * 现象系统本身不存 level（{@code WeatherContext} 是每 tick 传进来的），
+     * 所以清掉上面两处就足以让旧世界不可达。
+     * {@link JetSourceRegistry} 是 {@code static} 表，与维度无关，但它的键是
+     * {@code ResourceKey<Level>}，不清会让"同名的下一个存档维度"继承上一局的射流源。
+     *
+     * <p>单人游戏里集成服务器停了客户端还活着，这份状态也必须一起清，否则重新进世界
+     * 会拿到上一局的天气（{@code stateFor} 只在缺失时新建，不会自己覆盖）。
      */
     @SubscribeEvent
     public void onServerStopped(ServerStoppedEvent event) {
