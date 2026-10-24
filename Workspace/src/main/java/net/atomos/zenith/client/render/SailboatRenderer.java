@@ -23,7 +23,11 @@ public class SailboatRenderer extends EntityRenderer<SailboatEntity> {
     public void render(SailboatEntity boat, float yaw, float partialTick, PoseStack pose,
                        MultiBufferSource buffers, int light) {
         pose.pushPose();
-        pose.mulPose(com.mojang.math.Axis.YP.rotationDegrees(180 - yaw));
+        // SAIL-02：几何按"船头朝 +Z（南）"建模，而 EntityRenderer 传进来的 yaw 就是实体的
+        // MC yaw（0=+Z、顺时针正）。把模型里的 +Z 转到 (-sin yaw, cos yaw) 只需绕 Y 转 -yaw。
+        // 旧代码用 180-yaw（那是给"模型朝 -Z"的 LivingEntity 用的），效果是模型朝反方向，
+        // 只好再靠 setYRot 的反号凑出"视觉正好"。
+        pose.mulPose(com.mojang.math.Axis.YP.rotationDegrees(-yaw));
         // 受击晃动：照原版 BoatRenderer，绕船体 X 轴滚一下，幅度随受伤时间衰减
         float hurt = boat.getHurtTime() - partialTick;
         float dmg = Math.max(boat.getDamage() - partialTick, 0f);
