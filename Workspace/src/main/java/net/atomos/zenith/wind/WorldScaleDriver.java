@@ -56,7 +56,6 @@ public class WorldScaleDriver {
     }
 
     private final Random random;
-    private final double coriolisSign;
 
     private double baseFlowX = 3.0;
     private double baseFlowZ = 0.5;
@@ -72,8 +71,7 @@ public class WorldScaleDriver {
 
     public WorldScaleDriver(long seed) {
         this.random = new Random(seed ^ 0x9E3779B97F4A7C15L);
-        // 科里奥利符号：北半球为正。南半球（z 大范围）理论上该取反，这里简化处理
-        this.coriolisSign = 1.0;
+        // 半球（科里奥利符号）统一由 HemisphereConvention 提供，默认北半球
         for (int i = 0; i < DEFAULT_CYCLONE_CELL_COUNT; i++) {
             cyclones.add(CycloneCell.spawn(random, GRID_CELLS));
         }
@@ -112,9 +110,12 @@ public class WorldScaleDriver {
         baseFlowX += (forcedBaseFlowX - baseFlowX) * k;
         baseFlowZ += (forcedBaseFlowZ - baseFlowZ) * k;
 
-        // 天气间歇因子：随机游走，偶尔来段平静期
-        synopticLull += (random.nextDouble() - 0.5) * dtSeconds * 0.02;
-        synopticLull = clamp(synopticLull, SYNOPTIC_LULL_MIN_FACTOR, 1.0);
+        // 天气间歇因子：OU 过程（均值回归 + sqrt(dt) 噪声）。
+        // 旧式 synopticLull += (rand-0.5)*dt*0.02 的方差 ∝ dt²，改 tick 步长就改统计（DRV-07）
+        double lullNoise = (random.nextGaussian()) * 0.02 * Math.sqrt(dtSeconds);
+        double lullPull = (0.62 - synopticLull) * Math.min(1.0, dtSeconds / 900.0);
+        synopticLull = clamp(synopticLull + lullNoise + lullPull,
+                SYNOPTIC_LULL_MIN_FACTOR, 1.0);
 
         for (CycloneCell c : cyclones) c.advance(dtSeconds, random, GRID_CELLS);
         for (ConvectiveCluster c : clusters) c.advance(dtSeconds, random, GRID_CELLS, cyclones, stormActivity);
@@ -157,11 +158,15 @@ public class WorldScaleDriver {
             double gOuter = Math.exp(-outerNorm * outerNorm);
             double gCore = Math.exp(-coreNorm * coreNorm);
             double swirl = CYCLONE_CELL_MAX_SWIRL_MPS * c.intensity
-                    * (0.55 * gOuter + 1.40 * gCore) * coriolisSign * c.spin;
-            double radial = 3.0 * c.intensity * (0.70 * gOuter + 1.20 * gCore) * c.inflowSign;
+                    * (0.55 * gOuter + 1.40 * gCore);
+            // 径向：rx/rz 是"中心→采样点"的外向单位向量，
+            // radialSign 让低压辐合(指向中心)、高压辐散（DRV-08：旧符号反了）
+            double radial = 3.0 * c.intensity * (0.70 * gOuter + 1.20 * gCore)
+                    * c.radialSign();
             double inv = r > 1e-3 ? 1.0 / r : 0;
-            u += -dz * inv * swirl + dx * inv * radial;
-            w += dx * inv * swirl + dz * inv * radial;
+            double[] tangent = HemisphereConvention.tangential(dx, dz, c.lowPressure);
+            u += tangent[0] * inv * swirl + dx * inv * radial;
+            w += tangent[1] * inv * swirl + dz * inv * radial;
             double env = Math.max(gOuter, gCore);
             pressure += c.lowPressure
                     ? -CYCLONE_CELL_MAX_PRESSURE_ANOMALY_PA * c.intensity * env
@@ -197,16 +202,23 @@ public class WorldScaleDriver {
             if (r > t.influenceRadius) continue;
             double coreG = Math.exp(-(r / t.coreRadius) * (r / t.coreRadius));
             double inv = r > 1e-3 ? 1.0 / r : 0;
-            double tangential = t.maxWind * coreG;
-            torX += -dz * inv * tangential * t.spin;
-            torZ += dx * inv * tangential * t.spin;
+            double tangential = t.maxWind * coreG * t.intensityEnvelope();
+            // 切向同样走统一手性：旧式 (-dz, +dx) 在 (x,z) 上是顺时针
+            double[] tan = HemisphereConvention.tangential(dx, dz, true);
+            torX += tan[0] * inv * tangential;
+            torZ += tan[1] * inv * tangential;
             torHeat += 3.0 * coreG;
             torMoist += 0.25 * coreG;
             torUp = Math.max(torUp, coreG);
         }
 
-        u = clamp(u, -MAX_DRIVER_WIND_MPS, MAX_DRIVER_WIND_MPS);
-        w = clamp(w, -MAX_DRIVER_WIND_MPS, MAX_DRIVER_WIND_MPS);
+        // 按模长钳制：分量各自钳到 ±12 会让对角方向最到 17 m/s，并扭转风向（DRV-06）
+        double speed = Math.hypot(u, w);
+        if (speed > MAX_DRIVER_WIND_MPS) {
+            double s = MAX_DRIVER_WIND_MPS / speed;
+            u *= s;
+            w *= s;
+        }
         humidity = clamp01(humidity);
 
         return new Sample(u, w, pressure, tempBias, humidity, stormActivity,
@@ -231,10 +243,20 @@ public class WorldScaleDriver {
         double intensity;            // 0..1
         double outerRadius = 9000;   // blocks
         double coreRadius = 3500;    // blocks
-        double spin;                 // ±1
         boolean lowPressure;
-        double inflowSign;           // 低压辐合(+1)/高压辐散(-1)
         double phase;
+
+        /**
+         * 旋向已经和气压绑定：低压=气旋式、高压=反气旋式，由
+         * {@link HemisphereConvention#tangential}(dx, dz, lowPressure) 统一给出。
+         * 旧实现 {@code spin} 与 {@code lowPressure} 各自独立随机，
+         * 导致一半低压是反气旋式（DRV-05）；符号也直接写死成顺时针（SYS-01）。
+         */
+
+        /** 径向分量符号：低压辐合 {@code -1}、高压辐散 {@code +1}（DRV-08）。 */
+        double radialSign() {
+            return HemisphereConvention.radialSign(lowPressure);
+        }
 
         static CycloneCell spawn(Random random, int gridCells) {
             CycloneCell c = new CycloneCell();
@@ -243,9 +265,7 @@ public class WorldScaleDriver {
             c.intensity = 0.35 + random.nextDouble() * 0.65;
             c.outerRadius = 7000 + random.nextDouble() * 6000;
             c.coreRadius = 2500 + random.nextDouble() * 2500;
-            c.spin = random.nextBoolean() ? 1 : -1;
             c.lowPressure = random.nextDouble() < 0.6;
-            c.inflowSign = c.lowPressure ? 1 : -1;
             c.phase = random.nextDouble() * Math.PI * 2;
             return c;
         }
@@ -306,9 +326,16 @@ public class WorldScaleDriver {
         public double maxWind;          // m/s 18..42
         public double coreRadius;       // blocks 10..24
         public double influenceRadius;  // blocks 48..128
-        public double spin;
         private double ageSeconds;
         private double lifetimeSeconds;
+
+        /**
+         * 旋向：北半球龙卷是气旋式（逆时针），南半球顺时针。
+         * 旧实现每次生成独立随机，等于无视半球（DRV-05 的同根问题）。
+         */
+        public double spin() {
+            return HemisphereConvention.coriolisSign();
+        }
 
         static TornadoVortex spawn(Random random, ConvectiveCluster host, double support) {
             TornadoVortex t = new TornadoVortex();
@@ -317,7 +344,6 @@ public class WorldScaleDriver {
             t.maxWind = 18 + random.nextDouble() * 24;
             t.coreRadius = 10 + random.nextDouble() * 14;
             t.influenceRadius = 48 + random.nextDouble() * 80;
-            t.spin = random.nextBoolean() ? 1 : -1;
             t.lifetimeSeconds = TORNADO_MIN_LIFETIME_SECONDS
                     + random.nextDouble() * (TORNADO_MAX_LIFETIME_SECONDS - TORNADO_MIN_LIFETIME_SECONDS);
             t.ageSeconds = 0;

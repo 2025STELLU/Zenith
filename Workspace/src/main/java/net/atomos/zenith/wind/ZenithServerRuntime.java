@@ -327,12 +327,8 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
             precip = Math.max(precip, c.precipIntensity01());
         }
 
-        // 台风眼静风衰减
-        double eyeDamp = s.typhoons.eyeDampening(x, z);
-        if (eyeDamp > 0) {
-            vx *= (1 - eyeDamp);
-            vz *= (1 - eyeDamp);
-        }
+        // 台风眼：不再乘总风。Holland 廓线在 r→0 时已平滑趋于 0，眼内只有台风环流消失，
+        // L1 背景风仍然存在（WX-TY-03：旧实现把眼内背景风也一起抹掉了）。
 
         // L2 本地修正：服务端也算一份，gameplay 的遮蔽/绕流就靠它
         LocalFlowSolver.LocalFlow l2 = s.l2.solve(x, y, z, vx, vy, vz);

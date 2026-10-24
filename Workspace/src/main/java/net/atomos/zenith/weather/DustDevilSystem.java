@@ -1,6 +1,7 @@
 package net.atomos.zenith.weather;
 
 import net.atomos.zenith.api.ZenithTerrainSurfaceClass;
+import net.atomos.zenith.wind.HemisphereConvention;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 
@@ -117,8 +118,11 @@ public class DustDevilSystem implements WeatherPhenomenon {
                 double ring = Math.exp(-Math.pow((r - d.radiusBlocks) / (d.radiusBlocks * 1.5), 2));
                 double inv = r > 0.5 ? 1.0 / r : 0;
                 double vt = d.tangentialMps * ring * env * hDecay;
+                // 切向基向量走统一手性（SYS-01）：旧式 (-dz, +dx) 在 MC 坐标里是顺时针。
+                // 尘卷风的旋向本身就两个方向都有（观测上没有明显偏向），所以再乘 d.spin。
+                double[] tan = HemisphereConvention.tangential(dx, dz, true);
                 acc = acc.add(new WindContribution(
-                        -dz * inv * vt * d.spin, 0.5 * ring * env, dx * inv * vt * d.spin,
+                        tan[0] * inv * vt * d.spin, 0.5 * ring * env, tan[1] * inv * vt * d.spin,
                         0.25 * ring * env, 0));
             }
         }

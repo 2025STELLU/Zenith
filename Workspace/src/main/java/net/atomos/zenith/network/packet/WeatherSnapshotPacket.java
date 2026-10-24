@@ -215,7 +215,7 @@ public record WeatherSnapshotPacket(
             // t.x/z 是驱动格单位，客户端按方块坐标画 → 转成方块
             ni.add(new TornadoInfo(t.x * WorldScaleDriver.CELL_SIZE_BLOCKS,
                     t.z * WorldScaleDriver.CELL_SIZE_BLOCKS, (float) t.maxWind, (float) t.coreRadius,
-                    (float) t.intensityEnvelope(), (float) t.spin));
+                    (float) t.intensityEnvelope(), (float) t.spin()));
         }
         return new WeatherSnapshotPacket((float) stormActivity, tornadoCount, thermalCount,
                 (float) seaBreezeFront, (float) humidity01, ti, si, fi, di, qi, ni);

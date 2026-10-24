@@ -206,10 +206,9 @@ public class BackgroundMetGrid {
         double ps = pressureAt(i, j + 1), pn = pressureAt(i, j - 1);
         double dPdx = (pe - pw) / (2 * CELL_SIZE_BLOCKS);
         double dPdz = (ps - pn) / (2 * CELL_SIZE_BLOCKS);
-        // 北半球，科里奥利符号取正
-        double ug = -dPdz * GEOSTROPHIC_WIND_SCALE;
-        double vg = dPdx * GEOSTROPHIC_WIND_SCALE;
-        return new double[]{ug, vg};
+        // 地转风：北半球 u=+∂p/∂z·K、w=−∂p/∂x·K（见 HemisphereConvention#geostrophic）。
+        // 旧代码写成 (-∂p/∂z, +∂p/∂x)，两个分量都反，等于整体旋转 180°（SYS-01）。
+        return HemisphereConvention.geostrophic(dPdx, dPdz, GEOSTROPHIC_WIND_SCALE);
     }
 
     private double pressureAt(int i, int j) {
