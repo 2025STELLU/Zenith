@@ -31,4 +31,24 @@ public interface ZenithWindRuntimeProvider {
     default ZenithTerrainSample sampleTerrain(ZenithWorldRef world, ZenithBlockPos pos) {
         return ZenithTerrainSample.unknown();
     }
+
+    /**
+     * 批量采样（API-05）：{@code positions} 是 {@code [x,y,z,...]} 展平数组。
+     *
+     * <p>默认实现逐点调 {@link #sample}；有能力的实现应重写它，把维度查找
+     * （{@code levelFor}）与 L0/L1 的公共准备工作提到循环外——一次算一片时
+     * 那是 n 倍的重复。
+     */
+    default ZenithWindSample[] sampleBatch(ZenithWorldRef world, double[] positions, SamplePolicy policy) {
+        if (positions == null || positions.length % 3 != 0) {
+            throw new IllegalArgumentException("positions must be a flat [x,y,z,...] array");
+        }
+        int n = positions.length / 3;
+        ZenithWindSample[] out = new ZenithWindSample[n];
+        for (int i = 0; i < n; i++) {
+            out[i] = sample(world,
+                    ZenithVec3.of(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]), policy);
+        }
+        return out;
+    }
 }

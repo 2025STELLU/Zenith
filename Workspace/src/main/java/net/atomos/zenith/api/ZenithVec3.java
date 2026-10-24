@@ -26,6 +26,9 @@ public final class ZenithVec3 {
 
     public double length() { return Math.sqrt(x * x + y * y + z * z); }
 
+    /** 模长平方：判"是否为零矢量"时不必开根号。 */
+    public double lengthSqr() { return x * x + y * y + z * z; }
+
     public double horizontalLength() { return Math.sqrt(x * x + z * z); }
 
     public ZenithVec3 add(ZenithVec3 o) { return of(x + o.x, y + o.y, z + o.z); }

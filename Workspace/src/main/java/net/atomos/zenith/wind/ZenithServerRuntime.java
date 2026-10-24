@@ -137,8 +137,23 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
         LocalFlowSolver l2;
         MesoscaleGrid.DiagnosticsSummary lastDiagnostics =
                 new MesoscaleGrid.DiagnosticsSummary(0, 0, 0, 0.5, 0);
-        final List<LocalFlowSolver.HeatSource> heatCache = new ArrayList<>();
-        long heatCacheTick = -1;
+        /** L2 热源索引（RT-02）：按区块段归并、按玩家分桶，见 {@link HeatCache}。 */
+        HeatCache heat;
+        long heatScheduleTick = -1;
+        /**
+         * 上一帧粗风场的**几何**参照（RT-04）：只用来判断"网格中心/间距有没有变"。
+         * 不能拿它的数组当增量比较基准——那是上一次全量帧，见 {@link #coarseBase}。
+         */
+        CoarseWindPacket lastCoarse;
+        /**
+         * 增量比较的基准（RT-04）：六个数组的"客户端当前应有值"。
+         *
+         * <p>不能拿 {@link #lastCoarse} 当基准——那是上一次**全量**帧。如果只发 delta
+         * 而不推进基准，已经发过的格点下一帧仍然"与基准不同"，会被无限重复发送。
+         */
+        float[][] coarseBase;
+        /** 已经收到过全量帧的玩家：新人先补一帧全量，再进入增量流（RT-04）。 */
+        final java.util.Set<java.util.UUID> coarseRecipients = new java.util.HashSet<>();
         double focusX, focusZ;
         /** 存档状态是否已装回来（SYS-08）。 */
         boolean restored;
@@ -235,6 +250,8 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
             // 维度盐：同一个世界种子在不同维度拿到不同的现象序列（SYS-08）
             DimensionState s = new DimensionState(level.getSeed(), level.dimension().location().hashCode());
             s.terrainAdapter = new McTerrainAdapter(level, s.hashedTerrain);
+            // 热源索引（RT-02）：按区块段归并 + 段级调色板预筛，玩家分桶，不再全局均值扫盒
+            s.heat = new HeatCache(this::heatPowerOf);
             s.l2 = new LocalFlowSolver(
                     (x, y, z) -> {
                         // getMaxBuildHeight() 是**开区间上界**（RT-05 / L2-05）：
@@ -313,6 +330,29 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
         }
     }
 
+    /**
+     * 方块被破坏时立刻作废该段的热源索引（RT-02）。
+     *
+     * <p>没有这一步，玩家把岩浆桶收走后 10 秒内 L2 还在吹"已经不存在的上升气流"。
+     * 放置走 {@link net.neoforged.neoforge.event.level.BlockEvent.EntityPlaceEvent}。
+     * 火焰蔓延/岩浆流动这类没有事件的状态变化仍靠 10 秒的周期重扫兜底。
+     */
+    @SubscribeEvent
+    public void onBlockBreak(net.neoforged.neoforge.event.level.BlockEvent.BreakEvent event) {
+        invalidateHeat(event.getLevel(), event.getPos());
+    }
+
+    @SubscribeEvent
+    public void onBlockPlace(net.neoforged.neoforge.event.level.BlockEvent.EntityPlaceEvent event) {
+        invalidateHeat(event.getLevel(), event.getPos());
+    }
+
+    private void invalidateHeat(net.minecraft.world.level.LevelAccessor level, BlockPos pos) {
+        if (!(level instanceof ServerLevel serverLevel)) return;
+        DimensionState s = dimensions.get(serverLevel.dimension());
+        if (s != null && s.heat != null) s.heat.invalidate(pos.getX(), pos.getY(), pos.getZ());
+    }
+
     private void tickDimension(ServerLevel level) {
         DimensionState s = stateFor(level);
         long tick = level.getGameTime();
@@ -387,8 +427,8 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
             s.accumulatedDtSeconds = 0;
         }
 
-        // 5) 热源缓存刷新（无天气的维度不需要 L2 热源，省掉 50k 次方块查询）
-        if (weather && tick - s.heatCacheTick > 200) {
+        // 5) 热源索引增量刷新（RT-02）：按玩家分桶、跟随玩家 y、段级调色板预筛，10 秒内不重扫
+        if (weather) {
             refreshHeatCache(level, s, tick);
         }
 
@@ -542,12 +582,17 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
                 ? Math.min(1.0, l1.turbulenceIntensity() + turbAdd)
                 : Math.min(1.0, 0.1 + turbAdd);
 
-        // Source 必须反映**实际参与合成的最高层**（API-01）：旧实现无论 policy 都写 L1_COARSE
-        ZenithWindSample.Source source = wantLocal
-                ? ZenithWindSample.Source.L2_LOCAL
-                : ZenithWindSample.Source.L1_COARSE;
-        // 置信度：L1 的 0.9 反映 64 格分辨率；L2 的置信度看扫描覆盖率与区块加载状态（L2-05）
+        // 层位标记（API-11）：旧实现只能标一个 Source，而实际是 L0→L1→现象→L2 叠加。
+        int layers = ZenithWindSample.LAYER_L0 | ZenithWindSample.LAYER_L1;
+        if (wantPhenomena && weatherEnabled(level) && !s.phenomena().isEmpty()) {
+            layers |= ZenithWindSample.LAYER_PHENOMENA;
+        }
+        if (wantLocal) layers |= ZenithWindSample.LAYER_L2;
+
+        // 置信度：L1 的 0.9 反映 64 格分辨率；L2 的置信度看扫描覆盖率与区块加载状态（L2-05）。
+        // 现象层没有逐点误差估计，按"解析式 vs 网格采样"的差异再乘 0.95。
         float confidence = wantLocal ? (float) (0.9 * l2.confidence()) : 0.9f;
+        if ((layers & ZenithWindSample.LAYER_PHENOMENA) != 0) confidence *= 0.95f;
 
         return b.meanVelocity(ZenithVec3.of(vx, vy, vz))
                 .gustVelocity(ZenithVec3.of(l1.gustX(), l1.gustY(), l1.gustZ()))
@@ -559,10 +604,32 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
                 .airTemperatureKelvin((float) l1.airTempK())
                 .humidity01((float) l1.humidity01())
                 .sheltered(l2.sheltered() || l1.sheltered())
-                .source(source)
+                .source(wantLocal ? ZenithWindSample.Source.L2_LOCAL : ZenithWindSample.Source.L1_COARSE)
+                .layers(layers)
                 .confidence(confidence)
                 .freshnessEpoch(level.getGameTime())
                 .build();
+    }
+
+    /**
+     * 批量采样（API-05）：维度查找与"是否跑现象/L2"只判一次，循环里只做逐点计算。
+     *
+     * <p>默认实现会每点调一遍 {@link #sampleInternal}，其中 {@code levelFor} + {@code stateFor}
+     * 都是 Map 查找，n 点就是 n 倍。这里提到循环外，{@code WeatherSnapshotPacket} 那种
+     * "一次算一片"的场景直接受益。
+     */
+    @Override
+    public ZenithWindSample[] sampleBatch(ZenithWorldRef worldRef, double[] positions, SamplePolicy policy) {
+        if (positions == null || positions.length % 3 != 0) {
+            throw new IllegalArgumentException("positions must be a flat [x,y,z,...] array");
+        }
+        int n = positions.length / 3;
+        ZenithWindSample[] out = new ZenithWindSample[n];
+        for (int i = 0; i < n; i++) {
+            out[i] = sampleInternal(worldRef, positions[i * 3], positions[i * 3 + 1],
+                    positions[i * 3 + 2], policy, false);
+        }
+        return out;
     }
 
     /** 按维度键取 ServerLevel：不再每次遍历 + {@code toString()} 新建字符串（RT-05）。 */
@@ -675,37 +742,32 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
                 s.terrainAdapter.surfaceAt(pos.x(), pos.z()));
     }
 
-    // 热源缓存
+    // 热源索引（RT-02 / L2-03）
 
+    /**
+     * L2 查询热源（RT-02）。索引里已按段归并，这里只做球内筛选 + 最近 N 个裁剪。
+     *
+     * <p>旧实现从 {@code s.heatCache} 顺序扫全部条目——索引是"焦点 ±48 格"的全量扫描结果，
+     * 玩家走到 20 格外就整盒作废，而索引本身还是 200 tick 才重建一次。
+     */
     private List<LocalFlowSolver.HeatSource> heatNear(DimensionState s, double x, double y, double z,
                                                       double radius) {
-        List<LocalFlowSolver.HeatSource> out = new ArrayList<>();
-        double r2 = radius * radius;
-        for (LocalFlowSolver.HeatSource h : s.heatCache) {
-            double dx = h.x() - x, dy = h.y() - y, dz = h.z() - z;
-            if (dx * dx + dy * dy + dz * dz <= r2) out.add(h);
-        }
-        return out;
+        if (s.heat == null) return List.of();
+        return s.heat.near(x, y, z, radius);
     }
 
+    /**
+     * 热源索引的增量刷新调度（RT-02）。
+     *
+     * <p>每个玩家的 32 格盒各自扫一次，段级 10 秒内不重扫；因此稳态成本从
+     * "每 200 tick 50,421 次 {@code getBlockState}" 降到"每 20 tick 只对刚进入范围的段
+     * 做一次调色板判断"。没有玩家时什么都不做（旧实现用出生点假装有玩家）。
+     */
     private void refreshHeatCache(ServerLevel level, DimensionState s, long tick) {
-        s.heatCache.clear();
-        s.heatCacheTick = tick;
-        int cx = (int) s.focusX, cz = (int) s.focusZ;
-        int cy = level.getSeaLevel();
-        int R = 48;
-        for (int dx = -R; dx <= R; dx += 2)
-            for (int dz = -R; dz <= R; dz += 2)
-                for (int dy = -16; dy <= 24; dy += 2) {
-                    BlockPos p = new BlockPos(cx + dx, cy + dy, cz + dz);
-                    BlockState st = level.getBlockState(p);
-                    double power = heatPowerOf(st);
-                    if (power > 0) {
-                        s.heatCache.add(new LocalFlowSolver.HeatSource(
-                                p.getX() + 0.5, p.getY() + 0.5, p.getZ() + 0.5, power, 6));
-                    }
-                    if (s.heatCache.size() > 256) return;
-                }
+        if (s.heat == null) return;
+        if (s.heatScheduleTick >= 0 && tick - s.heatScheduleTick < HeatCache.SCHEDULE_INTERVAL_TICKS) return;
+        s.heatScheduleTick = tick;
+        s.heat.refresh(level, level.players(), tick);
     }
 
     private double heatPowerOf(BlockState st) {
@@ -786,27 +848,170 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
             }
         }
 
-        CoarseWindPacket pkt = new CoarseWindPacket(
-                level.dimension().location().toString(),
-                cx, cy, cz, (int) cell, COARSE_WIND_SYNC_RADIUS_CELLS,
-                vx, vy, vz, phx, phy, phz, level.getGameTime());
-        for (ServerPlayer player : players) {
-            PacketDistributor.sendToPlayer(player, pkt);
+        // 帧只算一次（增量比较有副作用：推进 coarseBase），全体玩家共用
+        CoarseWindPacket delta = buildCoarseFrame(s, level,
+                cx, cy, cz, (int) cell, vx, vy, vz, phx, phy, phz);
+
+        // 增量帧只对"已经收过上一帧"的玩家有意义（RT-04）。新进服/换维度的玩家
+        // 必须先拿一帧全量——否则客户端把 delta 当成基准帧，六个数组的长度是
+        // "变更格点数"而不是格点数，采样直接错位。
+        java.util.Set<java.util.UUID> current = new java.util.HashSet<>();
+        for (ServerPlayer player : players) current.add(player.getUUID());
+        s.coarseRecipients.retainAll(current); // 退服的人不占集合，回服时自动重新拿全量
+
+        if (delta == null) {
+            // 风场没变：只给还没拿到全量的新人补一帧
+            if (s.coarseBase == null) return;
+            for (ServerPlayer player : players) {
+                if (s.coarseRecipients.contains(player.getUUID())) continue;
+                PacketDistributor.sendToPlayer(player, fullFrame(level, cx, cy, cz, (int) cell,
+                        vx, vy, vz, phx, phy, phz));
+                s.coarseRecipients.add(player.getUUID());
+            }
+            return;
         }
+
+        if (delta.isFullFrame()) {
+            // 全量帧：所有人都能直接吃（新人也包含在内）
+            for (ServerPlayer player : players) {
+                PacketDistributor.sendToPlayer(player, delta);
+                s.coarseRecipients.add(player.getUUID());
+            }
+            return;
+        }
+
+        for (ServerPlayer player : players) {
+            if (s.coarseRecipients.contains(player.getUUID())) {
+                PacketDistributor.sendToPlayer(player, delta);
+            } else {
+                // 新人必须先从**当前时刻**的全量帧起步（RT-04）：不能拿 lastCoarse，
+                // 那可能是几十分钟前那一帧，中间累积的增量他没收到，之后永远对不上。
+                PacketDistributor.sendToPlayer(player, fullFrame(level, cx, cy, cz, (int) cell,
+                        vx, vy, vz, phx, phy, phz));
+                s.coarseRecipients.add(player.getUUID());
+            }
+        }
+    }
+
+    /** 用当前格点值拼一帧全量（给新进服玩家补基准用）。 */
+    private static CoarseWindPacket fullFrame(ServerLevel level,
+                                              double cx, double cy, double cz, int cell,
+                                              float[] vx, float[] vy, float[] vz,
+                                              float[] phx, float[] phy, float[] phz) {
+        return new CoarseWindPacket(level.dimension().location().toString(),
+                cx, cy, cz, cell, COARSE_WIND_SYNC_RADIUS_CELLS,
+                new int[0], vx, vy, vz, phx, phy, phz, level.getGameTime());
+    }
+
+    /**
+     * 组装粗风场帧，能发增量就发增量（RT-04）。
+     *
+     * <p>比较基准是 {@link DimensionState#coarseBase}——"客户端当前应有的值"。三件事会让它
+     * 退回全量：① 没有基准（首次/换维度）；② 网格中心或间距变了（玩家群整体移动超过一格，
+     * 格点不再对齐，增量没有意义）；③ 变更格点占比超过
+     * {@link CoarseWindPacket#FULL_RESEND_FRACTION}（索引表开销不划算）。
+     *
+     * <p>逐格阈值 {@link CoarseWindPacket#DIRTY_EPSILON_MPS} 是 0.1 m/s：低于这个值的差异
+     * 无论是粒子偏移还是风声都听不出来，不值得为它占 6 个 int16。
+     */
+    private CoarseWindPacket buildCoarseFrame(DimensionState s, ServerLevel level,
+                                              double cx, double cy, double cz, int cell,
+                                              float[] vx, float[] vy, float[] vz,
+                                              float[] phx, float[] phy, float[] phz) {
+        CoarseWindPacket prev = s.lastCoarse;
+        boolean sameFrame = prev != null && s.coarseBase != null
+                && prev.cellSizeBlocks() == cell
+                && prev.radiusCells() == COARSE_WIND_SYNC_RADIUS_CELLS
+                && Math.abs(prev.centerX() - cx) < 1e-6
+                && Math.abs(prev.centerZ() - cz) < 1e-6;
+
+        if (!sameFrame) {
+            setCoarseBase(s, vx, vy, vz, phx, phy, phz);
+            CoarseWindPacket full = new CoarseWindPacket(
+                    level.dimension().location().toString(),
+                    cx, cy, cz, cell, COARSE_WIND_SYNC_RADIUS_CELLS,
+                    new int[0], vx, vy, vz, phx, phy, phz, level.getGameTime());
+            s.lastCoarse = full;
+            return full;
+        }
+
+        int cells = vx.length;
+        float[][] base = s.coarseBase;
+        int[] dirty = new int[cells];
+        int dirtyCount = 0;
+        for (int k = 0; k < cells; k++) {
+            if (Math.abs(vx[k] - base[0][k]) > CoarseWindPacket.DIRTY_EPSILON_MPS
+                    || Math.abs(vy[k] - base[1][k]) > CoarseWindPacket.DIRTY_EPSILON_MPS
+                    || Math.abs(vz[k] - base[2][k]) > CoarseWindPacket.DIRTY_EPSILON_MPS
+                    || Math.abs(phx[k] - base[3][k]) > CoarseWindPacket.DIRTY_EPSILON_MPS
+                    || Math.abs(phy[k] - base[4][k]) > CoarseWindPacket.DIRTY_EPSILON_MPS
+                    || Math.abs(phz[k] - base[5][k]) > CoarseWindPacket.DIRTY_EPSILON_MPS) {
+                dirty[dirtyCount++] = k;
+            }
+        }
+        if (dirtyCount == 0) {
+            // 完全没变：什么都不发。客户端上一帧仍然有效，插值照常。
+            return null;
+        }
+        if (dirtyCount > cells * CoarseWindPacket.FULL_RESEND_FRACTION) {
+            setCoarseBase(s, vx, vy, vz, phx, phy, phz);
+            CoarseWindPacket full = new CoarseWindPacket(
+                    level.dimension().location().toString(),
+                    cx, cy, cz, cell, COARSE_WIND_SYNC_RADIUS_CELLS,
+                    new int[0], vx, vy, vz, phx, phy, phz, level.getGameTime());
+            s.lastCoarse = full;
+            return full;
+        }
+
+        int[] idx = new int[dirtyCount];
+        float[] dvx = new float[dirtyCount], dvy = new float[dirtyCount], dvz = new float[dirtyCount];
+        float[] dpx = new float[dirtyCount], dpy = new float[dirtyCount], dpz = new float[dirtyCount];
+        for (int o = 0; o < dirtyCount; o++) {
+            int k = dirty[o];
+            idx[o] = k;
+            dvx[o] = vx[k];
+            dvy[o] = vy[k];
+            dvz[o] = vz[k];
+            dpx[o] = phx[k];
+            dpy[o] = phy[k];
+            dpz[o] = phz[k];
+            // 已发送，推进基准：否则下一帧仍然"与基准不同"，同一格被无限重发
+            base[0][k] = vx[k];
+            base[1][k] = vy[k];
+            base[2][k] = vz[k];
+            base[3][k] = phx[k];
+            base[4][k] = phy[k];
+            base[5][k] = phz[k];
+        }
+        return new CoarseWindPacket(
+                level.dimension().location().toString(),
+                cx, cy, cz, cell, COARSE_WIND_SYNC_RADIUS_CELLS,
+                idx, dvx, dvy, dvz, dpx, dpy, dpz, level.getGameTime());
+    }
+
+    /** 全量帧发出后重置基准：客户端此时手里的就是这六个数组。 */
+    private static void setCoarseBase(DimensionState s, float[] vx, float[] vy, float[] vz,
+                                      float[] phx, float[] phy, float[] phz) {
+        s.coarseBase = new float[][]{vx.clone(), vy.clone(), vz.clone(),
+                phx.clone(), phy.clone(), phz.clone()};
     }
 
     private void broadcastWeatherSnapshot(ServerLevel level, DimensionState s) {
         var typhoons = s.typhoons.typhoons();
         var storms = s.storms.cells();
-        // 湿度就取焦点处的 L1 采样
-        var l1sample = s.l1.sample(s.focusX, 80, s.focusZ);
+        // 湿度就取焦点处（地表 AGL 10 格）的 L1 采样，别写死 y=80——
+        // 山地 y=120 时那是地下，洞穴 y=-40 时那是半空
+        double hy = s.terrainAdapter.terrainHeightBlocks(s.focusX, s.focusZ) + 10.0;
+        var l1sample = s.l1.sample(s.focusX, hy, s.focusZ);
         WeatherSnapshotPacket pkt = WeatherSnapshotPacket.build(
+                level.dimension().location().toString(),
                 s.driver.stormActivity(), s.tornadoes.activeCount(),
                 s.thermals.activeCount(), s.seaBreeze.frontInlandDistance(),
                 l1sample.humidity01(),
                 typhoons, storms,
                 s.fronts.fronts(), s.dustDevils.devils(), s.squallLines.lines(),
                 s.tornadoes.tornadoes());
+        // 快照是"本维度的天气现状"，内容一致：只建一次包，本维度所有玩家共用（RT-04）
         for (ServerPlayer player : level.players()) {
             PacketDistributor.sendToPlayer(player, pkt);
         }

@@ -1,5 +1,7 @@
 package net.atomos.zenith.weather;
 
+import net.atomos.zenith.api.ZenithWeatherEvent;
+import net.atomos.zenith.api.ZenithWeatherEvents;
 import net.atomos.zenith.wind.HemisphereConvention;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.server.level.ServerLevel;
@@ -128,6 +130,10 @@ public class TyphoonSystem implements WeatherPhenomenon {
                 t.influenceRadiusBlocks = 400 + random.nextDouble() * 400;
                 t.name = NAMES[nameCounter++ % NAMES.length];
                 typhoons.add(t);
+                // API-05：台风生成事件。第三方（气象图、警报模组）不用再每 tick 轮询 typhoons()
+                ZenithWeatherEvents.fire(ZenithWeatherEvent.of(
+                        ZenithWeatherEvent.Type.TYPHOON_SPAWNED, ctx.worldRef(),
+                        t.x, t.z, Math.min(1.0, t.vmaxMps / 70.0), t.name));
                 spawned = true;
             }
         }
@@ -167,7 +173,13 @@ public class TyphoonSystem implements WeatherPhenomenon {
             }
 
             // 30 天后强制消散，别让它赖着不走
-            if (t.ageSeconds > 2_592_000 || t.intensity01 < 0.12) it.remove();
+            if (t.ageSeconds > 2_592_000 || t.intensity01 < 0.12) {
+                // API-05：消散事件。两种消散原因都发，第三方不需要自己判阈值
+                ZenithWeatherEvents.fire(ZenithWeatherEvent.of(
+                        ZenithWeatherEvent.Type.TYPHOON_DISSIPATED, ctx.worldRef(),
+                        t.x, t.z, 0.0, t.name));
+                it.remove();
+            }
         }
     }
 

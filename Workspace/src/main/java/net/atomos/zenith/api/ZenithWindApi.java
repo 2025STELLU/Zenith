@@ -140,6 +140,50 @@ public final class ZenithWindApi {
         return sampleGameplay(world, position).effectiveVelocityVector();
     }
 
+    // ---- 批量采样（API-05） ----
+
+    /**
+     * 一次采一片点。
+     *
+     * <p>旧 API 只有单点 {@code sample(world, pos)}：{@code WeatherSnapshotPacket} 内部
+     * 要算 81 点只能自己写 private 循环；第三方要算一片区域时每次都要重新进
+     * {@code levelFor()} 与维度查找。
+     *
+     * <p>约定：{@code positions} 是 {@code [x,y,z, x,y,z, ...]} 展平数组（长度必须是 3 的倍数），
+     * 返回数组与点数一一对应。**单点失败不影响其它点**——那一项是 {@code Source.NONE} 的空样本。
+     *
+     * @throws IllegalArgumentException 长度不是 3 的倍数
+     */
+    public static ZenithWindSample[] sampleBatch(ZenithWorldRef world, double[] positions,
+                                                SamplePolicy policy) {
+        if (positions == null || positions.length % 3 != 0) {
+            throw new IllegalArgumentException("positions must be a flat [x,y,z,...] array");
+        }
+        ZenithWindRuntimeProvider p = require();
+        int n = positions.length / 3;
+        ZenithWindSample[] out = new ZenithWindSample[n];
+        for (int i = 0; i < n; i++) {
+            ZenithVec3 pos = ZenithVec3.of(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
+            try {
+                out[i] = p.sample(world, pos, policy);
+            } catch (RuntimeException e) {
+                out[i] = ZenithWindSample.builder()
+                        .authority(ZenithWindSample.Authority.SERVER_AUTHORITATIVE)
+                        .build();
+            }
+        }
+        return out;
+    }
+
+    public static ZenithWindSample[] sampleBatch(ZenithWorldRef world, double[] positions) {
+        return sampleBatch(world, positions, SamplePolicy.SERVER_AGGREGATED_PREFERRED);
+    }
+
+    /** 当前 API 版本（API-05），例如 {@code "0.2"}。 */
+    public static String apiVersion() {
+        return ZenithApiVersion.API_VERSION;
+    }
+
     // ---- L2 / 极线 ----
 
     public static ZenithL2Result runL2(ZenithL2Request request) {

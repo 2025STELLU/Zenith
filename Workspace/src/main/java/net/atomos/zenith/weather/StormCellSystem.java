@@ -1,5 +1,7 @@
 package net.atomos.zenith.weather;
 
+import net.atomos.zenith.api.ZenithWeatherEvent;
+import net.atomos.zenith.api.ZenithWeatherEvents;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
@@ -95,6 +97,12 @@ public class StormCellSystem implements WeatherPhenomenon {
         while (it.hasNext()) {
             StormCell c = it.next();
             c.ageSeconds += dtSeconds;
+            // API-05：进入成熟期只发一次（按"跨越 DEVELOP_SECONDS 边界"判，不用布尔位）
+            if (c.ageSeconds - dtSeconds < DEVELOP_SECONDS && c.ageSeconds >= DEVELOP_SECONDS) {
+                ZenithWeatherEvents.fire(ZenithWeatherEvent.of(
+                        ZenithWeatherEvent.Type.STORM_MATURED, ctx.worldRef(),
+                        c.x, c.z, Math.min(1.0, c.radiusBlocks / 120.0), ""));
+            }
             if (c.ageSeconds >= c.lifetimeSeconds()) {
                 it.remove();
                 continue;

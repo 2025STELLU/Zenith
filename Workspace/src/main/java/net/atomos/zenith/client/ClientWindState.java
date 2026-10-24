@@ -35,6 +35,8 @@ public final class ClientWindState implements ZenithClientWindRuntimeProvider {
     private volatile WeatherSnapshotPacket snapshot;
     /** 上次看到的维度：只在维度真的变了时才清空，死亡同维度重生不清 */
     private volatile ResourceKey<Level> lastDimension;
+    /** 当前粗风场帧是否带非零现象层（API-11 的 layer 标记用）。 */
+    private volatile boolean hasPhenomena;
 
     private ClientWindState() {}
 
@@ -46,10 +48,65 @@ public final class ClientWindState implements ZenithClientWindRuntimeProvider {
         if (dim != null && !pkt.dimension().equals(dim.location().toString())) {
             return;
         }
-        INSTANCE.coarseWind = pkt;
+        CoarseWindPacket prev = INSTANCE.coarseWind;
+        int gridCells = pkt.gridSize() * pkt.gridSize();
+        boolean prevUsable = prev != null
+                && prev.cellSizeBlocks() == pkt.cellSizeBlocks()
+                && prev.radiusCells() == pkt.radiusCells()
+                && Math.abs(prev.centerX() - pkt.centerX()) < 1e-6
+                && Math.abs(prev.centerZ() - pkt.centerZ()) < 1e-6
+                && prev.vx().length == gridCells;
+        if (pkt.isFullFrame() || !prevUsable) {
+            // 全量帧，或上一帧的网格对不上（换维度/走远了/基准本身是增量帧）：
+            // 增量帧没有基准就没法合并，直接丢弃等下一帧全量（RT-04）
+            if (pkt.isFullFrame()) {
+                INSTANCE.coarseWind = pkt;
+                INSTANCE.hasPhenomena = hasNonZero(pkt.phx(), pkt.phy(), pkt.phz());
+            }
+            return;
+        }
+        // 增量帧（RT-04）：只覆盖 changed 里那几个索引，其余沿用上一帧
+        CoarseWindPacket merged = merge(prev, pkt);
+        INSTANCE.coarseWind = merged;
+        INSTANCE.hasPhenomena = hasNonZero(merged.phx(), merged.phy(), merged.phz());
+    }
+
+    private static boolean hasNonZero(float[] a, float[] b, float[] c) {
+        for (int i = 0; i < a.length; i++) {
+            if (a[i] != 0 || b[i] != 0 || c[i] != 0) return true;
+        }
+        return false;
+    }
+
+    /** 把增量帧合并进上一帧的全量网格：位置/间距不变，值按索引逐格替换。 */
+    private static CoarseWindPacket merge(CoarseWindPacket base, CoarseWindPacket delta) {
+        int n = base.vx().length;
+        float[] vx = base.vx().clone(), vy = base.vy().clone(), vz = base.vz().clone();
+        float[] phx = base.phx().clone(), phy = base.phy().clone(), phz = base.phz().clone();
+        int[] idx = delta.changed();
+        for (int k = 0; k < idx.length; k++) {
+            int at = idx[k];
+            if (at < 0 || at >= n) continue; // 已由包的构造校验，这里再兜一层
+            vx[at] = delta.vx()[k];
+            vy[at] = delta.vy()[k];
+            vz[at] = delta.vz()[k];
+            phx[at] = delta.phx()[k];
+            phy[at] = delta.phy()[k];
+            phz[at] = delta.phz()[k];
+        }
+        return new CoarseWindPacket(delta.dimension(), delta.centerX(), delta.centerY(), delta.centerZ(),
+                delta.cellSizeBlocks(), delta.radiusCells(), new int[0],
+                vx, vy, vz, phx, phy, phz, delta.tick());
     }
 
     public static void onWeatherSnapshot(WeatherSnapshotPacket pkt) {
+        // 维度过滤（NET-03）：气象图/特效只认当前维度的快照。
+        // 旧包不带维度，换维度后 <2 s 内客户端会拿着上一维度的台风位置画图。
+        ResourceKey<Level> dim = Minecraft.getInstance().level == null
+                ? null : Minecraft.getInstance().level.dimension();
+        if (dim != null && !pkt.dimension().equals(dim.location().toString())) {
+            return;
+        }
         INSTANCE.snapshot = pkt;
     }
 
@@ -57,6 +114,7 @@ public final class ClientWindState implements ZenithClientWindRuntimeProvider {
     public static void clear() {
         INSTANCE.coarseWind = null;
         INSTANCE.snapshot = null;
+        INSTANCE.hasPhenomena = false;
     }
 
     @SubscribeEvent
@@ -173,12 +231,19 @@ public final class ClientWindState implements ZenithClientWindRuntimeProvider {
         // 没有数据时**不能**谎报"有风、只是 0 m/s"（NET-03 / API-11）：
         // 旧实现永远 source(L1_COARSE) + confidence(0.6)，跨维度传送后最多 2 s
         // 客户端拿到的是"L1 的零风"而不是"没数据"，UI/风声无法区分。
-        boolean hasData = coarseWind != null;
+        CoarseWindPacket cw = coarseWind;
+        boolean hasData = cw != null;
+        // 层位标记（API-11）：客户端只有背景/中尺度网格 + 现象层，没有 L2。
+        int layers = hasData
+                ? (ZenithWindSample.LAYER_L1
+                   | (INSTANCE.hasPhenomena ? ZenithWindSample.LAYER_PHENOMENA : 0))
+                : 0;
         return ZenithWindSample.builder()
                 .meanVelocity(v)
                 .gustVelocity(ZenithVec3.of(jitter, jitter * 0.3, -jitter * 0.7))
                 .turbulenceIntensity(hasData ? 0.25f : -1f)
                 .source(hasData ? ZenithWindSample.Source.L1_COARSE : ZenithWindSample.Source.NONE)
+                .layers(layers)
                 .authority(ZenithWindSample.Authority.CLIENT_LOCAL)
                 // 现象层是解析式重建、不是逐点采样，置信度比纯 L1 略低
                 .confidence(hasData ? 0.6f : 0f)

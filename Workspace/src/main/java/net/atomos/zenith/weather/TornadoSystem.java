@@ -1,5 +1,7 @@
 package net.atomos.zenith.weather;
 
+import net.atomos.zenith.api.ZenithWeatherEvent;
+import net.atomos.zenith.api.ZenithWeatherEvents;
 import net.atomos.zenith.wind.HemisphereConvention;
 import net.atomos.zenith.wind.WorldScaleDriver;
 import net.minecraft.nbt.CompoundTag;
@@ -126,6 +128,13 @@ public class TornadoSystem implements WeatherPhenomenon {
         while (it.hasNext()) {
             Tornado t = it.next();
             t.ageSeconds += dtSeconds;
+            // API-05：触地 = 包络到达满强度（age = 0.2·寿命）。只发一次，用跨越边界判，免加状态字段
+            double fullAt = t.lifetimeSeconds * 0.2;
+            if (t.ageSeconds - dtSeconds < fullAt && t.ageSeconds >= fullAt) {
+                ZenithWeatherEvents.fire(ZenithWeatherEvent.of(
+                        ZenithWeatherEvent.Type.TORNADO_FORMED, ctx.worldRef(),
+                        t.x, t.z, Math.min(1.0, t.maxWind / 45.0), t.name));
+            }
             if (t.ageSeconds >= t.lifetimeSeconds) {
                 it.remove();
                 continue;

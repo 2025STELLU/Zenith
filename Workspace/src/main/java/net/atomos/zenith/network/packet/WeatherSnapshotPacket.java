@@ -24,6 +24,7 @@ import java.util.List;
  * 供气象图界面与客户端特效使用。
  */
 public record WeatherSnapshotPacket(
+        String dimension,
         float stormActivity,
         int tornadoCount,
         int thermalCount,
@@ -41,6 +42,9 @@ public record WeatherSnapshotPacket(
 
     public WeatherSnapshotPacket {
         // 恶意/损坏包不得让客户端拿到 NaN 或负数计数（NET-07）
+        if (dimension == null || dimension.isEmpty() || dimension.length() > 128) {
+            throw new DecoderException("weather_snapshot 维度键非法");
+        }
         if (!Float.isFinite(stormActivity)) stormActivity = 0f;
         if (!Float.isFinite(seaBreezeFrontInland)) seaBreezeFrontInland = 0f;
         if (!Float.isFinite(humidity01)) humidity01 = 0f;
@@ -149,6 +153,7 @@ public record WeatherSnapshotPacket(
 
     public static final StreamCodec<ByteBuf, WeatherSnapshotPacket> STREAM_CODEC = StreamCodec.of(
             (buf, p) -> {
+                ByteBufCodecs.STRING_UTF8.encode(buf, p.dimension());
                 ByteBufCodecs.FLOAT.encode(buf, p.stormActivity());
                 ByteBufCodecs.VAR_INT.encode(buf, p.tornadoCount());
                 ByteBufCodecs.VAR_INT.encode(buf, p.thermalCount());
@@ -162,6 +167,7 @@ public record WeatherSnapshotPacket(
                 listOf(TORNADO_CODEC).encode(buf, p.tornadoes());
             },
             buf -> new WeatherSnapshotPacket(
+                    ByteBufCodecs.STRING_UTF8.decode(buf),
                     ByteBufCodecs.FLOAT.decode(buf),
                     ByteBufCodecs.VAR_INT.decode(buf),
                     ByteBufCodecs.VAR_INT.decode(buf),
@@ -179,7 +185,8 @@ public record WeatherSnapshotPacket(
         return TYPE;
     }
 
-    public static WeatherSnapshotPacket build(double stormActivity, int tornadoCount,
+    public static WeatherSnapshotPacket build(String dimension,
+                                              double stormActivity, int tornadoCount,
                                               int thermalCount, double seaBreezeFront,
                                               double humidity01,
                                               List<TyphoonSystem.Typhoon> typhoons,
@@ -216,11 +223,10 @@ public record WeatherSnapshotPacket(
             ni.add(new TornadoInfo(t.x, t.z, (float) t.maxWind, (float) t.coreRadius,
                     (float) t.intensityEnvelope(), (float) t.spin()));
         }
-        return new WeatherSnapshotPacket((float) stormActivity, tornadoCount, thermalCount,
+        return new WeatherSnapshotPacket(dimension, (float) stormActivity, tornadoCount, thermalCount,
                 (float) seaBreezeFront, (float) humidity01, ti, si, fi, di, qi, ni);
     }
 
     public static void handle(WeatherSnapshotPacket pkt, IPayloadContext ctx) {
         ctx.enqueueWork(() -> net.atomos.zenith.client.ClientWindState.onWeatherSnapshot(pkt));
-    }
-}
+    }}

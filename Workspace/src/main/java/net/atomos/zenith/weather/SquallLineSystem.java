@@ -1,5 +1,7 @@
 package net.atomos.zenith.weather;
 
+import net.atomos.zenith.api.ZenithWeatherEvent;
+import net.atomos.zenith.api.ZenithWeatherEvents;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
@@ -142,6 +144,10 @@ public class SquallLineSystem implements WeatherPhenomenon {
             l.intensity01 = 0.6 + stormAct * 0.4;
             l.groundY = groundY;
             lines.add(l);
+            // API-05：飑线生成事件（强度取刚算好的 intensity01）
+            ZenithWeatherEvents.fire(ZenithWeatherEvent.of(
+                    ZenithWeatherEvent.Type.SQUALL_LINE_FORMED, ctx.worldRef(),
+                    (l.x1 + l.x2) * 0.5, (l.z1 + l.z2) * 0.5, l.intensity01, ""));
         }
 
         Iterator<SquallLine> it = lines.iterator();

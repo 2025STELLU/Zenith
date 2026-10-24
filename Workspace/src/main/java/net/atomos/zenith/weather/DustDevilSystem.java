@@ -1,6 +1,8 @@
 package net.atomos.zenith.weather;
 
 import net.atomos.zenith.api.ZenithTerrainSurfaceClass;
+import net.atomos.zenith.api.ZenithWeatherEvent;
+import net.atomos.zenith.api.ZenithWeatherEvents;
 import net.atomos.zenith.wind.HemisphereConvention;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.server.level.ServerLevel;
@@ -106,6 +108,10 @@ public class DustDevilSystem implements WeatherPhenomenon {
             d.wanderX = (random.nextDouble() - 0.5) * 2;
             d.wanderZ = (random.nextDouble() - 0.5) * 2;
             devils.add(d);
+            // API-05：尘卷风生成（强度取切向风速 / 12 m/s 上限）
+            ZenithWeatherEvents.fire(ZenithWeatherEvent.of(
+                    ZenithWeatherEvent.Type.DUST_DEVIL_FORMED, ctx.worldRef(),
+                    d.x, d.z, Math.min(1.0, d.tangentialMps / 12.0), ""));
         }
 
         Iterator<DustDevil> it = devils.iterator();
