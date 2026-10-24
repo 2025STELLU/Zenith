@@ -1,7 +1,10 @@
 modLoader="javafml"
 loaderVersion="${neoforge_loader_version_range}"
-license="All Rights Reserved"
+# 与 LICENSE 一致：允许署名修改与署名二次分发，禁止非授权商用与同赛道竞品。
+# SPDX 自定义引用（本模组不是标准开源许可，不能写 MIT/Apache 之类）。
+license="LicenseRef-Zenith"
 issueTrackerURL="https://github.com/2025STELLU/Zenith/issues"
+displayURL="https://github.com/2025STELLU/Zenith"
 
 [[mixins]]
 config="zenith.mixins.json"

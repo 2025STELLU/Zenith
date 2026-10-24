@@ -127,12 +127,19 @@ public class SailboatEntity extends Entity {
         setYRot((float) Math.toDegrees(headingRadians));
     }
 
+    /**
+     * 找水面高度。
+     * <p>返回的是**水面 y**（连续坐标）。源水 {@code getOwnHeight()≈0.875}，所以水面 = {@code y + ownHeight}；
+     * 旧式 {@code y + 1 - ownHeight} 把源水算成 {@code y+0.125}，船体因此半沉 0.75 格（SAIL-09）。
+     */
     private double findWaterSurface(BlockPos pos) {
         for (int dy = 2; dy >= -3; dy--) {
             BlockPos p = pos.offset(0, dy, 0);
             if (level().getFluidState(p).is(Fluids.WATER)) {
                 while (level().getFluidState(p.above()).is(Fluids.WATER)) p = p.above();
-                return p.getY() + 1 - level().getFluidState(p).getOwnHeight();
+                double ownHeight = level().getFluidState(p).getOwnHeight();
+                if (ownHeight <= 0) ownHeight = 8.0 / 9.0; // 兜底：退化值按源水算
+                return p.getY() + ownHeight;
             }
         }
         return Double.NaN;

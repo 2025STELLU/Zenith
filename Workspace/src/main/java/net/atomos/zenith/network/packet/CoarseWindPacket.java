@@ -1,6 +1,7 @@
 package net.atomos.zenith.network.packet;
 
 import io.netty.buffer.ByteBuf;
+import io.netty.handler.codec.DecoderException;
 import net.atomos.zenith.ZenithMod;
 import net.minecraft.network.codec.ByteBufCodecs;
 import net.minecraft.network.codec.StreamCodec;
@@ -18,6 +19,25 @@ public record CoarseWindPacket(
         float[] vx, float[] vy, float[] vz,
         long tick) implements CustomPacketPayload {
 
+    /** 网格半径上限：63×63，远超当前 9×9，同时是恶意包的天花板（NET-07）。 */
+    private static final int MAX_RADIUS_CELLS = 31;
+    /** 单个 float 数组长度上限，防 `VAR_INT` 声明 2^31 直接 OOM。 */
+    private static final int MAX_ARRAY_LENGTH = 4096;
+
+    public CoarseWindPacket {
+        // 恶意/损坏包不得让客户端除零、越界或分配巨额数组（NET-07）
+        cellSizeBlocks = Math.max(1, Math.min(cellSizeBlocks, 4096));
+        radiusCells = Math.max(1, Math.min(radiusCells, MAX_RADIUS_CELLS));
+        int expected = (radiusCells * 2 + 1) * (radiusCells * 2 + 1);
+        if (vx.length != expected || vy.length != expected || vz.length != expected) {
+            throw new DecoderException("coarse_wind 数组长度不匹配：期望 " + expected
+                    + "，实际 " + vx.length + "/" + vy.length + "/" + vz.length);
+        }
+        if (!Double.isFinite(centerX) || !Double.isFinite(centerY) || !Double.isFinite(centerZ)) {
+            throw new DecoderException("coarse_wind 中心点不是有限值");
+        }
+    }
+
     public static final CustomPacketPayload.Type<CoarseWindPacket> TYPE =
             new CustomPacketPayload.Type<>(ResourceLocation.fromNamespaceAndPath(ZenithMod.MOD_ID, "coarse_wind"));
 
@@ -25,6 +45,9 @@ public record CoarseWindPacket(
         @Override
         public float[] decode(ByteBuf buf) {
             int n = ByteBufCodecs.VAR_INT.decode(buf);
+            if (n < 0 || n > MAX_ARRAY_LENGTH) {
+                throw new DecoderException("coarse_wind 数组长度越界：" + n);
+            }
             float[] arr = new float[n];
             for (int i = 0; i < n; i++) arr[i] = buf.readFloat();
             return arr;

@@ -6,6 +6,12 @@ import java.util.List;
 
 /** 极线计算请求。 */
 public final class ZenithPolarRequest {
+    /** 步长下限：防止 step=0/负数/NaN 让 {@link #angleSampleCount()} 除零或死循环（API-03）。 */
+    private static final double MIN_STEP_DEGREES = 0.01;
+    /** 采样数上限：10,000 点已经远超任何极线绘制的需要，同时是恶意请求的天花板。 */
+    private static final int MAX_SAMPLES = 10_000;
+    private static final double MAX_ABS_ANGLE_DEGREES = 180.0;
+
     private final ZenithSurfaceDescriptor surface;
     private final double minAngleDegrees;
     private final double maxAngleDegrees;
@@ -14,10 +20,16 @@ public final class ZenithPolarRequest {
 
     private ZenithPolarRequest(Builder b) {
         this.surface = b.surface;
-        this.minAngleDegrees = b.minAngleDegrees;
-        this.maxAngleDegrees = b.maxAngleDegrees;
-        this.stepDegrees = b.stepDegrees;
+        // 非有限值回落到默认，角度限制在 ±180°（默认扫描是 −15…15，不能夹成非负）
+        this.minAngleDegrees = finiteOr(b.minAngleDegrees, -15.0, -MAX_ABS_ANGLE_DEGREES, MAX_ABS_ANGLE_DEGREES);
+        this.maxAngleDegrees = finiteOr(b.maxAngleDegrees, 15.0, -MAX_ABS_ANGLE_DEGREES, MAX_ABS_ANGLE_DEGREES);
+        this.stepDegrees = finiteOr(b.stepDegrees, 1.0, MIN_STEP_DEGREES, MAX_ABS_ANGLE_DEGREES);
         this.reynoldsNumbers = Collections.unmodifiableList(new ArrayList<>(b.reynoldsNumbers));
+    }
+
+    private static double finiteOr(double value, double fallback, double min, double max) {
+        if (!Double.isFinite(value)) return fallback;
+        return Math.max(min, Math.min(max, value));
     }
 
     public static Builder builder(ZenithSurfaceDescriptor surface) {
@@ -31,7 +43,10 @@ public final class ZenithPolarRequest {
     public List<Double> reynoldsNumbers() { return reynoldsNumbers; }
 
     public int angleSampleCount() {
-        return (int) Math.floor((maxAngleDegrees - minAngleDegrees) / stepDegrees) + 1;
+        double span = maxAngleDegrees - minAngleDegrees;
+        if (span <= 0) return 1;                       // 反向/零跨度：只给一个点，别返回负数
+        double count = Math.floor(span / stepDegrees) + 1;
+        return (int) Math.max(1, Math.min(MAX_SAMPLES, count));
     }
 
     public double angleAt(int index) {

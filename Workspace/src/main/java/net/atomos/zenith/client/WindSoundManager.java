@@ -99,12 +99,20 @@ public final class WindSoundManager {
             this.pitch = (float) (0.82 + speed * 0.014);
             if (this.pitch > 1.25f) this.pitch = 1.25f;
         }
-        /** 偏移点的天空采样：高度取玩家脚高与该点地表上方的大者，别钻进山坡里被判室内。 */
+        /**
+         * 偏移点的天空采样：只有该点**真的埋进方块**才往上抬（最多 4 格），否则直接用玩家脚高。
+         * <p>旧实现取 {@code max(脚高, 地表+1)}，而 {@code WORLD_SURFACE} 的返回值本身就已经在地表**之上**，
+         * 于是 4 个偏移点在已加载区恒为露天——屋里/洞里风声跟野外几乎一样大（N-20）。
+         * 抬升上限 4 格：山坡上的点能露出地表，而屋顶/洞顶远高于 4 格时仍判为遮蔽。
+         */
         private static boolean skyOpenAt(ClientLevel level, BlockPos base, int dx, int dz) {
             int x = base.getX() + dx, z = base.getZ() + dz;
-            int y = Math.max(base.getY(),
-                    level.getHeight(Heightmap.Types.WORLD_SURFACE, x, z) + 1);
-            return level.canSeeSky(new BlockPos(x, y, z));
+            BlockPos p = new BlockPos(x, base.getY(), z);
+            if (!level.getBlockState(p).isAir()) {
+                int surface = level.getHeight(Heightmap.Types.WORLD_SURFACE, x, z);
+                p = new BlockPos(x, Math.min(surface, base.getY() + 4), z);
+            }
+            return level.canSeeSky(p);
         }
     }
 }

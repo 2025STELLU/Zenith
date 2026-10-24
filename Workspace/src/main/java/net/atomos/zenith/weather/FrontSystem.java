@@ -92,6 +92,9 @@ public class FrontSystem implements WeatherPhenomenon {
             f.moveX = n[0] * steer * speedFactor;
             f.moveZ = n[1] * steer * speedFactor;
             f.intensity01 = 0.5 + stormAct * 0.5;
+            // 播种年龄到成熟段起点：tick() 的升段 t/0.2 会在下一个 tick 把强度刷成 ~2e-5，
+            // 于是每条锋面前 20% 寿命（24–48 分钟）几乎无风无雨（WX-FR-01 / 旧 FR/SQ-01）。
+            f.ageSeconds = 0.2 * f.lifetimeSeconds;
             fronts.add(f);
         }
 

@@ -1,7 +1,7 @@
 ================================================================
 Zenith License
 Copyright (c) 2026 2025STELLU
-All Rights Reserved.
+Some Rights Reserved — 具体以本文件四条为准。
 ================================================================
 
 这份许可是我给 Zenith 定下的规矩，一共四条，读完再用。
@@ -11,10 +11,12 @@ All Rights Reserved.
    创意玩法）去赚钱：卖本体、卖整合包席位、绑进付费服务，
    都算商用。想谈合作可以找我聊，聊拢了就行。
 
-2. 禁止未授权二次分发
-   不许私自转载、搬运、 re-upload 到任何平台（包括但不限于
-   Modrinth、CurseForge、网盘、QQ 群文件）。想分享的话，
-   转发官方发布链接就行。
+2. 允许在署名前提下的二次分发
+   你可以转载、搬运、做成整合包分发（Modrinth、CurseForge、
+   网盘、群文件都行），前提是**署名原作者**：保留
+   "Zenith by 2025STELLU"，附上官方发布链接，并在显眼位置
+   注明"基于 Zenith 修改"。改了哪些文件，最好顺手留注释。
+   不许移除、替换或弱化作者信息后当成自己的作品发布。
 
 3. 允许在署名情况下的改动
    你可以改代码、做魔改版自己玩，前提是：保留原作者署名
@@ -32,14 +34,17 @@ All Rights Reserved.
 作者不对因使用本软件产生的任何损失负责。
 
 ----------------------------------------------------------------
-All rights reserved by 2025STELLU.
+Some rights reserved by 2025STELLU.
 
 1. No commercial use without prior written permission.
-2. No redistribution or re-upload without permission — share the
-   official release link instead.
+2. Redistribution is allowed **with attribution**: keep
+   "Zenith by 2025STELLU", link the official release, and state
+   clearly that it is based on Zenith. Do not strip or weaken the
+   author credits and republish it as your own work.
 3. Modifications are allowed provided you keep the original
    attribution (2025STELLU) and clearly state it is based on Zenith.
 4. No competing weather/wind mods substantially overlapping with
    Zenith built upon this software or its modifications.
 
 This software is provided "as is", without warranty of any kind.
+

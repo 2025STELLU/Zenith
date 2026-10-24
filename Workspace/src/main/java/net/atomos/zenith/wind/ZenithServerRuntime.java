@@ -649,6 +649,28 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
             return level.getChunkSource().getChunk(cx, cz, ChunkStatus.FULL, false);
         }
 
+        /**
+         * 该列**最高非空气方块的方块 y**（地表方块本身）。
+         * <p>{@code getHeight(WORLD_SURFACE)} 返回的是"最高非空气方块**之上**的第一格"，即空气格；
+         * 要拿 {@code getBlockState} 的坐标必须减 1，否则读到的是空气（SYS-12）。
+         */
+        private static int surfaceBlockY(ChunkAccess c, int x, int z) {
+            int h = c.getHeight(Heightmap.Types.WORLD_SURFACE, x & 15, z & 15);
+            // 整列全空气（虚空）时 h 等于 minBuildHeight，减 1 会掉出世界；夹回最低层，
+            // 否则 surfaceBiome() 的 quart y 会算出负的 section 索引
+            return Math.max(h - 1, c.getMinBuildHeight());
+        }
+
+        /** 地表方块处的生物群系（quart 坐标）。固定 y=64 会让高山/深海/洞穴判错（SYS-13）。 */
+        private static Holder<Biome> surfaceBiome(ChunkAccess c, int x, int z) {
+            int y = surfaceBlockY(c, x, z);
+            return c.getNoiseBiome(x >> 2, y >> 2, z >> 2);
+        }
+
+        /**
+         * 地表**顶面** y（AGL 基准）：站在地面上时采样点的 y 就是这个值，所以 AGL 计算直接用 {@code h}，
+         * 不减 1。需要方块坐标的地方一律走 {@link #surfaceBlockY}。
+         */
         @Override
         public double terrainHeightBlocks(double bx, double bz) {
             ChunkAccess c = chunkIfLoaded(bx, bz);
@@ -665,7 +687,7 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
             if (c == null) return fallback.roughnessAt(bx, bz);
             int x = (int) Math.floor(bx), z = (int) Math.floor(bz);
             // 别用 biome.toString() 猜名字：Biome 没覆写 toString，拿到的是类名@hash，永远匹配不上
-            Holder<Biome> biome = c.getNoiseBiome(x >> 2, 64 >> 2, z >> 2);
+            Holder<Biome> biome = surfaceBiome(c, x, z);
             float r = 0.3f;
             if (biome.is(BiomeTags.IS_FOREST) || biome.is(BiomeTags.IS_JUNGLE)
                     || biome.is(BiomeTags.IS_TAIGA)) r = 0.75f;
@@ -686,7 +708,7 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
             float t;
             if (c != null) {
                 int x = (int) Math.floor(bx), z = (int) Math.floor(bz);
-                t = c.getNoiseBiome(x >> 2, 64 >> 2, z >> 2).value().getBaseTemperature();
+                t = surfaceBiome(c, x, z).value().getBaseTemperature();
             } else {
                 t = 0.7f;
             }
@@ -713,10 +735,12 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
             ChunkAccess c = chunkIfLoaded(bx, bz);
             if (c != null) {
                 int x = (int) Math.floor(bx), z = (int) Math.floor(bz);
-                int h = c.getHeight(Heightmap.Types.WORLD_SURFACE, x & 15, z & 15);
-                BlockPos p = new BlockPos(x, h, z);
-                BlockState st = c.getBlockState(p);
-                return st.getFluidState().is(Fluids.WATER);
+                // h-1 才是地表方块；读 h 读到的是空气（SYS-12）
+                BlockState st = c.getBlockState(new BlockPos(x, surfaceBlockY(c, x, z), z));
+                if (!st.getFluidState().is(Fluids.WATER)) return false;
+                // 只有海洋/河流群系的水才算"海"：否则池塘、水池也会生成海风与台风（SB-04）
+                Holder<Biome> biome = surfaceBiome(c, x, z);
+                return biome.is(BiomeTags.IS_OCEAN) || biome.is(BiomeTags.IS_RIVER);
             }
             return fallback.isOceanAt(bx, bz);
         }
@@ -726,8 +750,7 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
             ChunkAccess c = chunkIfLoaded(bx, bz);
             if (c == null) return fallback.surfaceAt(bx, bz);
             int x = (int) Math.floor(bx), z = (int) Math.floor(bz);
-            int h = c.getHeight(Heightmap.Types.WORLD_SURFACE, x & 15, z & 15);
-            BlockState st = c.getBlockState(new BlockPos(x, h, z));
+            BlockState st = c.getBlockState(new BlockPos(x, surfaceBlockY(c, x, z), z));
             if (st.getFluidState().is(Fluids.WATER)) return ZenithTerrainSurfaceClass.OCEAN;
             // 别用方块名 contains：以前 "sand" 会误伤 sandstone，"stone" 会误伤 redstone_ore
             if (st.is(BlockTags.SAND)) return ZenithTerrainSurfaceClass.DESERT_SAND;

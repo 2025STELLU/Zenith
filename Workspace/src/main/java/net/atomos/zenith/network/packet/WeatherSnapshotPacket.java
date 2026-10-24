@@ -1,6 +1,7 @@
 package net.atomos.zenith.network.packet;
 
 import io.netty.buffer.ByteBuf;
+import io.netty.handler.codec.DecoderException;
 import net.atomos.zenith.ZenithMod;
 import net.atomos.zenith.weather.DustDevilSystem;
 import net.atomos.zenith.weather.FrontSystem;
@@ -34,6 +35,19 @@ public record WeatherSnapshotPacket(
         List<DevilInfo> dustDevils,
         List<SquallInfo> squallLines,
         List<TornadoInfo> tornadoes) implements CustomPacketPayload {
+
+    /** 单个现象列表的长度上限（每类现象实际 ≤24，留足余量）。 */
+    private static final int MAX_LIST_SIZE = 256;
+
+    public WeatherSnapshotPacket {
+        // 恶意/损坏包不得让客户端拿到 NaN 或负数计数（NET-07）
+        if (!Float.isFinite(stormActivity)) stormActivity = 0f;
+        if (!Float.isFinite(seaBreezeFrontInland)) seaBreezeFrontInland = 0f;
+        if (!Float.isFinite(humidity01)) humidity01 = 0f;
+        humidity01 = Math.max(0f, Math.min(1f, humidity01));
+        tornadoCount = Math.max(0, Math.min(tornadoCount, 1024));
+        thermalCount = Math.max(0, Math.min(thermalCount, 1024));
+    }
 
     public record TyphoonInfo(String name, double x, double z,
                               float vmaxMps, float rmaxBlocks, float eyeRadiusBlocks,
@@ -117,7 +131,10 @@ public record WeatherSnapshotPacket(
             @Override
             public java.util.List<T> decode(ByteBuf buf) {
                 int n = ByteBufCodecs.VAR_INT.decode(buf);
-                java.util.List<T> list = new ArrayList<>(n);
+                if (n < 0 || n > MAX_LIST_SIZE) {
+                    throw new DecoderException("weather_snapshot 列表长度越界：" + n);
+                }
+                java.util.List<T> list = new ArrayList<>(Math.min(n, 16));
                 for (int i = 0; i < n; i++) list.add(element.decode(buf));
                 return list;
             }
