@@ -83,7 +83,10 @@ public final class ZenithCommands {
                     var state = ZenithServerRuntime.get().debugState(player.serverLevel().dimension());
                     if (state == null) return 0;
                     BlockPos p = player.blockPosition();
-                    state.storms.spawnDebug(p.getX(), p.getZ());
+                    state.storms.spawnDebug(p.getX(), p.getZ(),
+                            player.serverLevel().getHeight(
+                                    net.minecraft.world.level.levelgen.Heightmap.Types.WORLD_SURFACE,
+                                    p.getX(), p.getZ()));
                     src.sendSuccess(() -> Component.translatable("zenith.command.storm_spawned"), true);
                     return 1;
                 }))
@@ -104,7 +107,9 @@ public final class ZenithCommands {
                     if (state == null) return 0;
                     BlockPos p = player.blockPosition();
                     state.thermals.spawnDebug(p.getX() + 20, p.getZ(),
-                            player.serverLevel().getSeaLevel());
+                            player.serverLevel().getHeight(
+                                    net.minecraft.world.level.levelgen.Heightmap.Types.WORLD_SURFACE,
+                                    p.getX() + 20, p.getZ()));
                     src.sendSuccess(() -> Component.translatable("zenith.command.thermal_spawned"), true);
                     return 1;
                 }))

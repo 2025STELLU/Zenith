@@ -35,10 +35,11 @@ public final class FogController {
         if (cam instanceof LivingEntity le
                 && (le.hasEffect(MobEffects.BLINDNESS) || le.hasEffect(MobEffects.DARKNESS))) return;
         // 平滑在 clientTick 里按 tick 做，这里只管读数设雾参
-        if (currentDensity < 0.02) return;
+        double density = currentDensity * net.atomos.zenith.ZenithConfig.fogMultiplier();
+        if (density < 0.02) return;
 
         // 浓雾时能见度压到约 24 格；1.21.1 不 cancel 的话改了也白改
-        float far = Mth.lerp((float) currentDensity, event.getFarPlaneDistance(), 24f);
+        float far = Mth.lerp((float) Math.min(1.0, density), event.getFarPlaneDistance(), 24f);
         event.setFarPlaneDistance(far);
         event.setNearPlaneDistance(Math.min(event.getNearPlaneDistance(), far * 0.1f));
         event.setCanceled(true);

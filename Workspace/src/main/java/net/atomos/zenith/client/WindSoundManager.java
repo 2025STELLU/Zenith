@@ -91,9 +91,10 @@ public final class WindSoundManager {
                 if (skyOpenAt(mc.level, base, 0, -8)) open++;
                 skyExposure += (open / 5.0f - skyExposure) * 0.1f;
             }
-            // 1.5 m/s 以下几乎无声，18 m/s 满音量；室内再打折
+            // 1.5 m/s 以下几乎无声，18 m/s 满音量；室内再打折；客户端配置再乘一次
             double target = Math.max(0, Math.min(1, (speed - 1.5) / 16.0));
-            double audible = target * 0.55 * (0.25 + 0.75 * skyExposure);
+            double audible = target * 0.55 * (0.25 + 0.75 * skyExposure)
+                    * net.atomos.zenith.ZenithConfig.windSoundVolume();
             // 平滑
             this.volume += (audible - this.volume) * 0.08f;
             this.pitch = (float) (0.82 + speed * 0.014);

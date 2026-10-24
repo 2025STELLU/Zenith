@@ -38,6 +38,12 @@ public class ZenithMod {
         ZenithSounds.register(modEventBus);
         ZenithNetwork.register(modEventBus);
 
+        // 配置系统（ENG-03）：SERVER 管物理/性能/开关，CLIENT 管表现
+        modContainer.registerConfig(net.neoforged.fml.config.ModConfig.Type.SERVER, ZenithConfig.SERVER_SPEC);
+        modContainer.registerConfig(net.neoforged.fml.config.ModConfig.Type.CLIENT, ZenithConfig.CLIENT_SPEC);
+        modEventBus.addListener(this::onConfigLoad);
+        modEventBus.addListener(this::onConfigReload);
+
         modEventBus.addListener(this::commonSetup);
 
         ZenithServerRuntime.init();
@@ -49,5 +55,17 @@ public class ZenithMod {
 
     private void commonSetup(FMLCommonSetupEvent event) {
         event.enqueueWork(() -> LOGGER.info("Zenith common setup complete."));
+    }
+
+    /**
+     * 配置加载/重载：把半球写进 {@code HemisphereConvention}（SYS-01 的唯一出处）。
+     * 放在这里而不是构造器，是因为 SERVER 配置要等 NeoForge 的配置加载事件之后才可读。
+     */
+    private void onConfigLoad(net.neoforged.fml.event.config.ModConfigEvent.Loading event) {
+        ZenithConfig.applyHemisphere();
+    }
+
+    private void onConfigReload(net.neoforged.fml.event.config.ModConfigEvent.Reloading event) {
+        ZenithConfig.applyHemisphere();
     }
 }

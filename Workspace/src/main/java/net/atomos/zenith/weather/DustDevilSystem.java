@@ -20,6 +20,11 @@ import java.util.Random;
  */
 public class DustDevilSystem implements WeatherPhenomenon {
     public static final int MAX_DEVILS = 12;
+    /**
+     * {@code (1 - e^{-x²}) / max(0.35, x)} 在 {@code x ≈ 1.121} 处的峰值。
+     * 切向廓线除以它之后峰值正好是 1，{@code tangentialMps} 就真的是最大切向风速。
+     */
+    public static final double TANGENTIAL_PEAK = 0.6382;
 
     public static final class DustDevil {
         public double x, z;
@@ -30,12 +35,29 @@ public class DustDevilSystem implements WeatherPhenomenon {
         public double lifetimeSeconds = 120;
         public double spin = 1;
         public double wanderX, wanderZ;
+        /** 生成处的地表 y（AGL 基准）。旧实现拿 {@code heightBlocks} 当绝对 y 用（WX-DD-02）。 */
+        public double groundY = 64.0;
 
         double envelope() {
             double t = ageSeconds / lifetimeSeconds;
             if (t < 0.2) return t / 0.2;
             if (t > 0.7) return Math.max(0, 1 - (t - 0.7) / 0.3);
             return 1.0;
+        }
+
+        /**
+         * 切向风廓线：Burgers–Rott 型 {@code v ∝ (1 - exp(-(r/rc)²))·rc/r}，
+         * 在 {@code r → 0} 时线性趋于 0、在 {@code r ≈ 1.12·rc} 处达到峰值 1.0。
+         *
+         * <p>旧实现在 {@code r < radiusBlocks} 只给垂直上升、完全没有切向风，
+         * "风眼"是个不转的柱子（WX-DD-01）。
+         */
+        double tangentialProfile(double r) {
+            if (r < 1e-3) return 0.0;
+            double x = r / radiusBlocks;
+            double core = 1.0 - Math.exp(-x * x);
+            // 除以峰值 0.6382（在 x≈1.12 处），使返回值最大为 1
+            return core / Math.max(0.35, x) / TANGENTIAL_PEAK;
         }
     }
 
@@ -60,8 +82,9 @@ public class DustDevilSystem implements WeatherPhenomenon {
                     || surface == ZenithTerrainSurfaceClass.ROCK
                     || surface == ZenithTerrainSurfaceClass.BEACH;
             if (!hotGround && random.nextDouble() < 0.8) continue;
-            // 尘卷风怕大风，背景风太强就长不出来
-            var l1s = ctx.l1().sample(ax, 80, az);
+            double groundY = ctx.terrain().heightAt(ax, az);
+            // 尘卷风怕大风，背景风太强就长不出来（采样高度用当地地面 AGL，不是绝对 y=80）
+            var l1s = ctx.l1().sample(ax, groundY + 10, az);
             if (Math.hypot(l1s.windX(), l1s.windZ()) > 6 && random.nextDouble() < 0.7) continue;
 
             DustDevil d = new DustDevil();
@@ -71,6 +94,7 @@ public class DustDevilSystem implements WeatherPhenomenon {
             d.tangentialMps = 5 + random.nextDouble() * 7;
             d.lifetimeSeconds = 60 + random.nextDouble() * 240;
             d.spin = random.nextBoolean() ? 1 : -1;
+            d.groundY = groundY;
             d.wanderX = (random.nextDouble() - 0.5) * 2;
             d.wanderZ = (random.nextDouble() - 0.5) * 2;
             devils.add(d);
@@ -86,6 +110,8 @@ public class DustDevilSystem implements WeatherPhenomenon {
             }
             d.x += d.wanderX * dtSeconds;
             d.z += d.wanderZ * dtSeconds;
+            // 地表跟着走：尘卷风会从沙丘晃到洼地，AGL 基准得跟着更新（WX-DD-02）
+            d.groundY = ctx.terrain().heightAt(d.x, d.z);
             // 游荡方向缓慢变化
             if (random.nextDouble() < dtSeconds * 0.2) {
                 double a = random.nextDouble() * Math.PI * 2;
@@ -106,25 +132,32 @@ public class DustDevilSystem implements WeatherPhenomenon {
         for (DustDevil d : devils) {
             double dx = x - d.x, dz = z - d.z;
             double r = Math.sqrt(dx * dx + dz * dz);
-            if (r > d.radiusBlocks * 3 || y > d.heightBlocks + 60) continue;
+            // 高度用 AGL：旧实现拿 heightBlocks(20–60) 当绝对 y，地表 200 的高山上
+            // 采样点全都 y > heightBlocks+60 → 永远采样不到（WX-DD-02）
+            double agl = y - d.groundY;
+            if (r > d.radiusBlocks * 3 || agl < 0 || agl > d.heightBlocks + 60) continue;
             double env = d.envelope();
-            double hDecay = y < d.heightBlocks ? 1.0 : Math.max(0, 1 - (y - d.heightBlocks) / 60.0);
-            if (r < d.radiusBlocks) {
-                // 核心区：上升气流最强
-                double core = 1 - r / d.radiusBlocks;
-                acc = acc.add(new WindContribution(0, 4.5 * core * env * hDecay, 0,
-                        0.4 * core * env, 0));
-            } else {
-                double ring = Math.exp(-Math.pow((r - d.radiusBlocks) / (d.radiusBlocks * 1.5), 2));
-                double inv = r > 0.5 ? 1.0 / r : 0;
-                double vt = d.tangentialMps * ring * env * hDecay;
-                // 切向基向量走统一手性（SYS-01）：旧式 (-dz, +dx) 在 MC 坐标里是顺时针。
-                // 尘卷风的旋向本身就两个方向都有（观测上没有明显偏向），所以再乘 d.spin。
-                double[] tan = HemisphereConvention.tangential(dx, dz, true);
-                acc = acc.add(new WindContribution(
-                        tan[0] * inv * vt * d.spin, 0.5 * ring * env, tan[1] * inv * vt * d.spin,
-                        0.25 * ring * env, 0));
-            }
+            // 柱顶平滑收口，不在 heightBlocks+60 处硬切（SYS-05）
+            double hDecay = agl < d.heightBlocks ? 1.0
+                    : Math.max(0, 1 - (agl - d.heightBlocks) / 60.0);
+            hDecay = hDecay * hDecay * (3 - 2 * hDecay); // smoothstep
+            double inv = r > 0.5 ? 1.0 / r : 0;
+            // 切向风在核心与环区用同一条 Burgers–Rott 廓线，核心也转（WX-DD-01）
+            double vt = d.tangentialMps * d.tangentialProfile(r) * env * hDecay;
+            // 切向基向量走统一手性（SYS-01）：旧式 (-dz, +dx) 在 MC 坐标里是顺时针。
+            // 尘卷风的旋向本身就两个方向都有（观测上没有明显偏向），所以再乘 d.spin。
+            double[] tan = HemisphereConvention.tangential(dx, dz, true);
+            double tx = tan[0] * inv * vt * d.spin;
+            double tz = tan[1] * inv * vt * d.spin;
+            // 核心上升：r → 0 处最强（1 - (r/R)²），不是旧实现的线性锥
+            double coreN = Math.max(0.0, 1 - (r / d.radiusBlocks) * (r / d.radiusBlocks));
+            double updraft = 4.5 * coreN * env * hDecay;
+            // 外圈补一点下沉，质量守恒
+            double sink = r > d.radiusBlocks
+                    ? -0.6 * Math.exp(-Math.pow((r - d.radiusBlocks) / (d.radiusBlocks * 1.2), 2)) * env * hDecay
+                    : 0.0;
+            double turb = (0.4 * coreN + 0.25 * Math.min(1.0, d.tangentialProfile(r))) * env;
+            acc = acc.add(new WindContribution(tx, updraft + sink, tz, turb, 0));
         }
         return acc;
     }

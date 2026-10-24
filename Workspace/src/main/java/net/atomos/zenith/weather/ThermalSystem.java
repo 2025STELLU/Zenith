@@ -1,7 +1,7 @@
 package net.atomos.zenith.weather;
 
 import net.atomos.zenith.api.ZenithTerrainSurfaceClass;
-import net.atomos.zenith.wind.NoiseUtil;
+import net.atomos.zenith.wind.MesoscaleGrid;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 
@@ -21,6 +21,24 @@ import java.util.Random;
 public class ThermalSystem implements WeatherPhenomenon {
     public static final int MAX_THERMALS = 24;
     public static final double SPAWN_RADIUS_BLOCKS = 320.0;
+    /**
+     * 下沉补偿峰值系数。由质量守恒定出来的：
+     *
+     * <pre>
+     * 上升通量   F↑ = ∫₀^R w₀(1-(r/R)²)·2πr dr = πR²w₀/2
+     * 下沉环     r ∈ [R, 2.2R]，形状 g(t)=t(1-t)³/0.10547（峰值归一化，峰在 t=0.25 → r=1.3R）
+     * 下沉通量   F↓ = 2πR²·S·w₀·∫₀¹ g(t)(1+1.2t)·1.2 dt = 2πR²·S·w₀·0.66370
+     * 令 F↑ = F↓ ⇒ S = 0.5/(2·1.2·0.66370) = 0.31390
+     * </pre>
+     *
+     * <p>旧实现固定 {@code -0.5 m/s}，与上升量无关：{@code w₀=6} 时下沉通量只有上升的
+     * 1/5，热泡整体是个净质量源（WX-TH-02）。
+     */
+    public static final double SINK_PEAK_PER_UPDRAFT = 0.31390;
+    /** 环带外缘 = 2.2R，与 {@code outerTaper} 一致。 */
+    public static final double SINK_RING_OUTER = 2.2;
+    /** 环带宽度 = 1.2R（R → 2.2R）。 */
+    public static final double SINK_RING_WIDTH = 1.2;
 
     public static double heatingRate(ZenithTerrainSurfaceClass surface) {
         return switch (surface) {
@@ -42,13 +60,74 @@ public class ThermalSystem implements WeatherPhenomenon {
         public double updraftMps;
         public double ageSeconds;
         public double lifetimeSeconds;
+        /** 柱顶绝对 y（= {@code groundY + heightAgl}）。 */
         public double topY;
+        /** 柱高（AGL）。旧实现直接用 120–240，与上升速度无关（WX-TH-04）。 */
+        public double heightAgl;
+        /**
+         * 生成处的地表 y（AGL 基准）。
+         * 旧实现在 {@code sample()} 里写死 {@code groundY = 60}：地表 70 的沙漠里
+         * 采样点全都 {@code y < 60}，热泡永远采样不到；y<60 的低地则从空中就开始
+         * （WX-TH-01 / SYS-03）。
+         */
+        public double groundY = 64.0;
+        /**
+         * 生成时的太阳因子。夜间已有热泡要跟着现在的太阳衰减，
+         * 旧实现只在生成时看太阳、之后强度定死（WX-TH-05）。
+         */
+        public double spawnSolar = 1.0;
+        /** 当前（最近一次 tick）的太阳因子，由 {@code tick()} 每步刷新。 */
+        public double solarFactor = 1.0;
+
+        /**
+         * 光照衰减：{@code solarFactor / spawnSolar}，上限 1（白天不会因为
+         * "生成时太阳弱"而变强）。{@code spawnSolar} 下限 0.1，避免日出瞬间生成
+         * 的热泡因为分母太小而被放大。
+         */
+        double solarDecay() {
+            return Math.max(0.0, Math.min(1.0, solarFactor / Math.max(0.1, spawnSolar)));
+        }
 
         double envelope() {
             double t = ageSeconds / lifetimeSeconds;
             if (t < 0.15) return t / 0.15;
             if (t > 0.75) return Math.max(0, 1 - (t - 0.75) / 0.25);
             return 1.0;
+        }
+
+        /**
+         * 垂直廓线 {@code sin(π·agl/H)^0.4}：地面为 0、柱中最大、柱顶回 0。
+         * 旧实现整柱常数，柱顶直接 {@code continue} 成水平切面，柱底也从满强度开始。
+         */
+        double verticalProfile(double agl) {
+            if (heightAgl <= 1e-6) return 0;
+            double u = agl / heightAgl;
+            if (u <= 0 || u >= 1) return 0;
+            return Math.pow(Math.sin(Math.PI * u), 0.4);
+        }
+
+        /**
+         * 外缘平滑权重 [0,1]：核心柱 {@code r < R} 为 1，在 {@code R..2.2R} 之间
+         * 用 smoothstep 收敛到 0（WX-SQ/SYS-05 同类的硬截断：旧实现在
+         * {@code r = radiusBlocks} 处把 4.5 m/s 上升气流直接归零）。
+         */
+        double outerTaper(double r) {
+            double outer = radiusBlocks * SINK_RING_OUTER;
+            if (r <= radiusBlocks) return 1.0;
+            if (r >= outer) return 0.0;
+            double t = (r - radiusBlocks) / (outer - radiusBlocks);
+            return 1.0 - t * t * (3.0 - 2.0 * t);
+        }
+
+        /**
+         * 下沉环形状：{@code g(t)=t(1-t)³/0.10547}，{@code t ∈ [0,1]} 映射到
+         * {@code r ∈ [R, 2.2R]}。峰值归一化到 1，位置在 {@code t=0.25} 即
+         * {@code r=1.3R}（Allen 2006 的简化热泡模型）。
+         */
+        static double sinkRingShape(double t) {
+            if (t <= 0 || t >= 1) return 0;
+            double u = 1 - t;
+            return t * u * u * u / 0.10546875;
         }
     }
 
@@ -80,7 +159,15 @@ public class ThermalSystem implements WeatherPhenomenon {
             t.radiusBlocks = 8 + random.nextDouble() * 12;
             t.updraftMps = (2 + random.nextDouble() * 4) * (0.5 + rate * 0.7) * (0.4 + solar * 0.8);
             t.lifetimeSeconds = 300 + random.nextDouble() * 600;
-            t.topY = ctx.terrain().heightAt(ax, az) + 120 + random.nextDouble() * 120;
+            t.groundY = ctx.terrain().heightAt(ax, az);
+            // 混合层顶：柱高跟随上升速度（≈ 25 格每 m/s），夹在 40–200 格，
+            // 再与 L1 的不稳定层顶对齐（WX-TH-04）
+            double ablHeight = ctx.l1().sample(ax, t.groundY + 2, az).ablStability() < -0.15
+                    ? MesoscaleGrid.ABL_UNSTABLE_HEIGHT_BLOCKS
+                    : MesoscaleGrid.ABL_STABLE_HEIGHT_BLOCKS;
+            t.heightAgl = Math.min(Math.max(40, t.updraftMps * 25), Math.min(200, ablHeight));
+            t.topY = t.groundY + t.heightAgl;
+            t.spawnSolar = Math.max(0.1, solar);
             thermals.add(t);
         }
 
@@ -93,9 +180,15 @@ public class ThermalSystem implements WeatherPhenomenon {
                 it.remove();
                 continue;
             }
-            var s = ctx.l1().sample(t.x, ctx.terrain().heightAt(t.x, t.z) + 40, t.z);
+            var s = ctx.l1().sample(t.x, t.groundY + 40, t.z);
             t.x += s.windX() * dtSeconds * 0.7;
             t.z += s.windZ() * dtSeconds * 0.7;
+            // 地表跟着漂移而变（WX-TH-01 的 AGL 基准不能停在生成点）
+            t.groundY = ctx.terrain().heightAt(t.x, t.z);
+            t.topY = t.groundY + t.heightAgl;
+            // 夜间/降雨时已有的热泡跟着减弱（WX-TH-05）
+            t.solarFactor = Math.max(0, FogModel.solarFactor(ctx.timeOfDay01()))
+                    * (ctx.raining() ? 0.25 : 1.0) * ctx.seasonInfo().solarMultiplier();
         }
     }
 
@@ -111,10 +204,14 @@ public class ThermalSystem implements WeatherPhenomenon {
         for (Thermal t : thermals) {
             double dx = x - t.x, dz = z - t.z;
             double r = Math.sqrt(dx * dx + dz * dz);
-            double groundY = 60; // 偷懒用 60 近似，运行时换真实地形
-            double topY = t.topY;
-            if (y < groundY || y > topY) continue;
-            double env = t.envelope();
+            // AGL：用生成处记录的真实地表 y，不再写死 60（WX-TH-01）
+            double agl = y - t.groundY;
+            if (agl <= 0 || agl >= t.heightAgl) continue;
+            // 垂直廓线：地面 0 → 柱中最大 → 柱顶 0，没有水平切面（WX-TH-02 后半）
+            double env = t.envelope() * t.verticalProfile(agl) * t.solarDecay();
+            if (env <= 0) continue;
+            double taper = t.outerTaper(r);
+            if (taper <= 0) continue;
             if (r < t.radiusBlocks) {
                 double core = 1 - (r / t.radiusBlocks) * (r / t.radiusBlocks);
                 double w = t.updraftMps * core * env;
@@ -122,11 +219,14 @@ public class ThermalSystem implements WeatherPhenomenon {
                 double inv = r > 0.5 ? 1.0 / r : 0;
                 acc = acc.add(new WindContribution(
                         -dx * inv * conv, w, -dz * inv * conv, 0.15 * core * env, 0));
-            } else if (r < t.radiusBlocks * 2.2) {
-                // 下沉补偿环：柱子抽上去的空气，得在外圈沉回来
-                double ring = (r - t.radiusBlocks) / (t.radiusBlocks * 1.2);
-                double sink = -0.5 * Math.sin(ring * Math.PI) * env;
-                acc = acc.add(new WindContribution(0, sink, 0, 0.05 * env, 0));
+            } else {
+                // 下沉补偿环：按质量通量配平，不再是固定 −0.5 m/s（WX-TH-02）。
+                // 形状 g(t)=t(1-t)³，峰在 r=1.3R；强度 = SINK_PEAK_PER_UPDRAFT · w₀
+                double t01 = (r - t.radiusBlocks) / (t.radiusBlocks * SINK_RING_WIDTH);
+                if (t01 >= 1) continue;
+                double sink = -SINK_PEAK_PER_UPDRAFT * t.updraftMps
+                        * Thermal.sinkRingShape(t01) * env * taper;
+                acc = acc.add(new WindContribution(0, sink, 0, 0.05 * env * taper, 0));
             }
         }
         return acc;
@@ -147,7 +247,11 @@ public class ThermalSystem implements WeatherPhenomenon {
         t.radiusBlocks = 14;
         t.updraftMps = 5;
         t.lifetimeSeconds = 600;
+        t.groundY = groundY;
+        t.heightAgl = 180;
         t.topY = groundY + 180;
+        t.spawnSolar = 1.0;
+        t.solarFactor = 1.0;
         thermals.add(t);
     }
 }

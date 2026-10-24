@@ -86,6 +86,7 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
     private static final Logger LOGGER = LoggerFactory.getLogger("zenith");
 
     public static final double SOLVER_STEP_SECONDS = 0.05;
+    /** 默认值在这里；实际运行时由 {@code ZenithConfig} 覆盖（ENG-03）。 */
     public static final int BACKGROUND_MET_REFRESH_TICKS = 256;
     public static final int MESOSCALE_REFRESH_TICKS = 64;
     public static final int COARSE_WIND_SYNC_TICKS = 40;
@@ -216,6 +217,11 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
         boolean raining = level.isRaining();
         boolean thundering = level.isThundering();
 
+        // 维度门控（SYS-09）：下界/末地没有天气语义，硬跑只会生出"基岩上的热泡"
+        // 和"真闪电劈基岩"，还白烧热源扫描。天气现象整段跳过；L0/L1 风场仍然推进，
+        // 这样模组维度和下界里的风采样（鞘翅/风车/帆船）不会突然变成 0 风。
+        boolean weather = weatherEnabled(level);
+
         // 1) 驱动器推进（含上 tick 的 L1 反馈）
         var d = s.lastDiagnostics;
         var feedback = new WorldScaleDriver.Feedback(
@@ -223,37 +229,65 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
         s.driver.advance(dt, timeOfDay, raining, thundering, feedback);
 
         // 2) 天气现象
-        WeatherContext ctx = new WeatherContext(level, s.driver, s.l0, s.l1,
-                s.terrainAdapter, tick, timeOfDay, raining, thundering,
-                SeasonSystem.compute(level.getDayTime()));
-        for (WeatherPhenomenon p : s.phenomena()) {
-            p.tick(level, dt, ctx);
+        if (weather) {
+            WeatherContext ctx = new WeatherContext(level, s.driver, s.l0, s.l1,
+                    s.terrainAdapter, tick, timeOfDay, raining, thundering,
+                    SeasonSystem.compute(level.getDayTime()));
+            for (WeatherPhenomenon p : s.phenomena()) {
+                if (phenomenonEnabled(p)) p.tick(level, dt, ctx);
+            }
         }
 
         // 3) L0 刷新
-        if (tick % BACKGROUND_MET_REFRESH_TICKS == 0) {
+        int l0Ticks = Math.max(1, net.atomos.zenith.ZenithConfig.backgroundRefreshTicks());
+        if (tick % l0Ticks == 0) {
             s.l0.setFocus(s.focusX, s.focusZ);
-            s.l0.refresh(s.driver, s.terrainAdapter, BACKGROUND_MET_REFRESH_TICKS * dt,
+            s.l0.refresh(s.driver, s.terrainAdapter, l0Ticks * dt,
                     timeOfDay, raining, SeasonSystem.compute(level.getDayTime()).tempBiasKelvin());
         }
         // 4) L1 刷新
-        if (tick % MESOSCALE_REFRESH_TICKS == 0) {
+        int l1Ticks = Math.max(1, net.atomos.zenith.ZenithConfig.mesoscaleRefreshTicks());
+        if (tick % l1Ticks == 0) {
             s.l1.setFocus(s.focusX, s.focusZ);
             s.lastDiagnostics = s.l1.refresh(s.l0, s.terrainAdapter, timeOfDay, raining, tick);
         }
 
-        // 5) 热源缓存刷新
-        if (tick - s.heatCacheTick > 200) {
+        // 5) 热源缓存刷新（无天气的维度不需要 L2 热源，省掉 50k 次方块查询）
+        if (weather && tick - s.heatCacheTick > 200) {
             refreshHeatCache(level, s, tick);
         }
 
         // 6) 网络广播
-        if (tick % COARSE_WIND_SYNC_TICKS == 0) {
+        if (tick % Math.max(1, net.atomos.zenith.ZenithConfig.coarseSyncTicks()) == 0) {
             broadcastCoarseWind(level, s);
         }
-        if (tick % WEATHER_SNAPSHOT_TICKS == 0) {
+        if (tick % Math.max(1, net.atomos.zenith.ZenithConfig.weatherSnapshotTicks()) == 0) {
             broadcastWeatherSnapshot(level, s);
         }
+    }
+
+    /**
+     * 维度门控（SYS-09）：有天空光、且没有天花板（下界/末地都不满足）才跑天气。
+     * 配置里可以显式放开下界/末地。
+     */
+    private static boolean weatherEnabled(ServerLevel level) {
+        if (level.dimension().equals(Level.OVERWORLD)) return true;
+        if (level.dimension().equals(Level.NETHER)) return net.atomos.zenith.ZenithConfig.weatherInNether();
+        if (level.dimension().equals(Level.END)) return net.atomos.zenith.ZenithConfig.weatherInEnd();
+        // 模组维度：按维度类型判断
+        return level.dimensionType().hasSkyLight() && !level.dimensionType().hasCeiling();
+    }
+
+    /** 逐个系统的开关（ENG-03）。 */
+    private static boolean phenomenonEnabled(WeatherPhenomenon p) {
+        if (p instanceof ThermalSystem) return net.atomos.zenith.ZenithConfig.enableThermal();
+        if (p instanceof SeaBreezeSystem) return net.atomos.zenith.ZenithConfig.enableSeaBreeze();
+        if (p instanceof StormCellSystem) return net.atomos.zenith.ZenithConfig.enableStormCell();
+        if (p instanceof TyphoonSystem) return net.atomos.zenith.ZenithConfig.enableTyphoon();
+        if (p instanceof SquallLineSystem) return net.atomos.zenith.ZenithConfig.enableSquallLine();
+        if (p instanceof DustDevilSystem) return net.atomos.zenith.ZenithConfig.enableDustDevil();
+        if (p instanceof MonsoonSystem) return net.atomos.zenith.ZenithConfig.enableMonsoon();
+        return true;
     }
 
     private void updateFocus(ServerLevel level, DimensionState s) {
@@ -315,16 +349,19 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
         MesoscaleGrid.Sample l1 = s.l1.sample(x, y, z);
         double vx = l1.windX(), vy = l1.windY(), vz = l1.windZ();
 
-        // 天气现象贡献
+        // 天气现象贡献（无天气维度直接跳过：现象只在 tick 里生成，这里再兜一层）
         double turbAdd = 0, precip = 0;
-        for (WeatherPhenomenon p : s.phenomena()) {
-            WindContribution c = p.sample(x, y, z, vx, vz);
-            if (c.isNone()) continue;
-            vx += c.vx();
-            vy += c.vy();
-            vz += c.vz();
-            turbAdd += c.turbulenceAdd();
-            precip = Math.max(precip, c.precipIntensity01());
+        if (weatherEnabled(level)) {
+            for (WeatherPhenomenon p : s.phenomena()) {
+                if (!phenomenonEnabled(p)) continue;
+                WindContribution c = p.sample(x, y, z, vx, vz);
+                if (c.isNone()) continue;
+                vx += c.vx();
+                vy += c.vy();
+                vz += c.vz();
+                turbAdd += c.turbulenceAdd();
+                precip = Math.max(precip, c.precipIntensity01());
+            }
         }
 
         // 台风眼：不再乘总风。Holland 廓线在 r→0 时已平滑趋于 0，眼内只有台风环流消失，

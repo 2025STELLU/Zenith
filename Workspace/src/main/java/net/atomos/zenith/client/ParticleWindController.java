@@ -31,6 +31,10 @@ public final class ParticleWindController {
         Minecraft mc = Minecraft.getInstance();
         ClientLevel level = mc.level;
         if (level == null || mc.player == null || mc.isPaused()) return;
+        // 客户端配置（ENG-03）：关掉风场粒子 / 降密度
+        if (!net.atomos.zenith.ZenithConfig.showWindParticles()) return;
+        double densityScale = net.atomos.zenith.ZenithConfig.particleDensity();
+        if (densityScale <= 0) return;
         if (++tickCounter % 2 != 0) return;
 
         double px = mc.player.getX(), py = mc.player.getY(), pz = mc.player.getZ();
@@ -46,7 +50,7 @@ public final class ParticleWindController {
 
         // 风迹
         if (speed > 3.0) {
-            int count = Math.min(6, (int) (speed / 3));
+            int count = Math.min(6, (int) (speed / 3 * densityScale));
             for (int i = 0; i < count; i++) {
                 double x = px + (RANDOM.nextDouble() - 0.5) * 36;
                 double y = py + RANDOM.nextDouble() * 10 - 2;

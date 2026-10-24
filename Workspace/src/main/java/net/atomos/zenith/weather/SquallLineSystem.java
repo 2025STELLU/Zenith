@@ -11,25 +11,54 @@ import java.util.Random;
 /**
  * 飑线：一条移动的线状强对流，附带下击暴流。
  *
- * 一个维度最多 2 条，长度 200–600 格。线上是强降水核心带 + 频繁闪电；
+ * <p>一个维度最多 2 条，长度 200–600 格。线上是强降水核心带 + 频繁闪电；
  * 线前顶着阵风锋，径向外流 15–20 m/s，比单体雷暴更强更宽；
- * 线上还随机嵌着下击暴流核（下沉 −10 m/s、半径 30 格），砸到地面再向外流。
+ * 线上还随机嵌着下击暴流核（下沉 −10 m/s、半径 20–50 格），砸到地面再向外流。
  * 生成条件：风暴活动度高 + 低层风切变强。
+ *
+ * <p><b>几何</b>：所有径向/沿法向的贡献都乘一个 smoothstep 收口，不再用
+ * {@code if (ahead < 160)} 这种硬边界（SYS-05）：玩家穿过边界时风速连续变化。
  */
 public class SquallLineSystem implements WeatherPhenomenon {
     public static final int MAX_LINES = 2;
+    /** 阵风锋影响的前向距离（格）。旧实现 160 处硬切。 */
+    public static final double GUST_FRONT_RANGE = 200.0;
+    /** 冷池出流（线后）的影响距离（格）。 */
+    public static final double COLD_POOL_REAR_RANGE = 120.0;
+    /** 阵风的高度衰减尺度（格 AGL）：地面最强、300 格 AGL 后基本消失（WX-SQ-01）。 */
+    public static final double GUST_HEIGHT_SCALE = 300.0;
+    /** 下击暴流上限/寿命范围（WX-SQ-03）。 */
+    public static final int MAX_MICROBURSTS_PER_LINE = 6;
+    public static final double MICROBURST_MIN_LIFETIME = 60;
+    public static final double MICROBURST_MAX_LIFETIME = 180;
+    public static final double MICROBURST_MIN_RADIUS = 20;
+    public static final double MICROBURST_MAX_RADIUS = 50;
 
     public static final class Microburst {
         public double x, z;
         public double ageSeconds;
-        public double lifetimeSeconds = 600;
+        public double lifetimeSeconds = 120;
         public double radiusBlocks = 30;
+        /** 生成处的地表 y（AGL 基准）。 */
+        public double groundY = 64;
+        /** 由母体飑线的 stormActivity 派生，0.5–1.0。 */
+        public double strength01 = 1.0;
 
         double envelope() {
-            double t = ageSeconds / lifetimeSeconds;
-            if (t < 0.25) return t / 0.25;
-            if (t > 0.6) return Math.max(0, 1 - (t - 0.6) / 0.4);
+            double t = ageSeconds / Math.max(1e-3, lifetimeSeconds);
+            if (t < 0.25) return t / 0.25;           // 下沉核建立
+            if (t > 0.6) return Math.max(0, 1 - (t - 0.6) / 0.4); // 触地后外流衰减
             return 1.0;
+        }
+
+        /** 外流（触地后）的径向收口：r 从 R 到 2.5R 平滑归零。 */
+        double outflowTaper(double r) {
+            double inner = radiusBlocks;
+            double outer = radiusBlocks * 2.5;
+            if (r <= inner) return 1.0;
+            if (r >= outer) return 0.0;
+            double t = (r - inner) / (outer - inner);
+            return 1.0 - t * t * (3.0 - 2.0 * t);
         }
     }
 
@@ -41,6 +70,8 @@ public class SquallLineSystem implements WeatherPhenomenon {
         public double intensity01 = 1.0;
         public final List<Microburst> microbursts = new ArrayList<>();
         public double lightningTimer;
+        /** 母体所在的地表 y 均值（AGL 基准）。 */
+        public double groundY = 64;
 
         public double distanceTo(double x, double z) {
             double dx = x2 - x1, dz = z2 - z1;
@@ -82,7 +113,8 @@ public class SquallLineSystem implements WeatherPhenomenon {
             double dist = 600 + random.nextDouble() * 600;
             double cx = anchor.getX() + Math.cos(ang) * dist;
             double cz = anchor.getZ() + Math.sin(ang) * dist;
-            var l1s = ctx.l1().sample(cx, 150, cz);
+            double groundY = ctx.terrain().heightAt(cx, cz);
+            var l1s = ctx.l1().sample(cx, groundY + 80, cz);
             if (stormAct < 0.6 && random.nextDouble() < 0.5) continue;
 
             SquallLine l = new SquallLine();
@@ -100,6 +132,7 @@ public class SquallLineSystem implements WeatherPhenomenon {
             l.moveX = l1s.windX() * 0.7;
             l.moveZ = l1s.windZ() * 0.7;
             l.intensity01 = 0.6 + stormAct * 0.4;
+            l.groundY = groundY;
             lines.add(l);
         }
 
@@ -113,13 +146,26 @@ public class SquallLineSystem implements WeatherPhenomenon {
             }
             l.x1 += l.moveX * dtSeconds; l.z1 += l.moveZ * dtSeconds;
             l.x2 += l.moveX * dtSeconds; l.z2 += l.moveZ * dtSeconds;
+            // 母体的 AGL 基准跟着走（山地上不能还用生成时的地面）
+            l.groundY = ctx.terrain().heightAt((l.x1 + l.x2) * 0.5, (l.z1 + l.z2) * 0.5);
 
-            if (random.nextDouble() < dtSeconds * 0.02 && l.microbursts.size() < 6) {
+            // 微下击暴流：成熟期（活过 60 s）按 stormActivity 概率生成（WX-SQ-03）。
+            // 期望约每 50 s 一个（stormActivity=1），同时最多 MAX_MICROBURSTS_PER_LINE 个。
+            if (l.ageSeconds > 60
+                    && l.microbursts.size() < MAX_MICROBURSTS_PER_LINE
+                    && random.nextDouble() < dtSeconds * 0.02 * Math.max(0.3, stormAct)) {
                 double t = random.nextDouble();
+                double mbX = l.x1 + (l.x2 - l.x1) * t + (random.nextDouble() - 0.5) * 60;
+                double mbZ = l.z1 + (l.z2 - l.z1) * t + (random.nextDouble() - 0.5) * 60;
                 Microburst mb = new Microburst();
-                mb.x = l.x1 + (l.x2 - l.x1) * t + (random.nextDouble() - 0.5) * 60;
-                mb.z = l.z1 + (l.z2 - l.z1) * t + (random.nextDouble() - 0.5) * 60;
-                mb.lifetimeSeconds = 300 + random.nextDouble() * 600;
+                mb.x = mbX;
+                mb.z = mbZ;
+                mb.radiusBlocks = MICROBURST_MIN_RADIUS
+                        + random.nextDouble() * (MICROBURST_MAX_RADIUS - MICROBURST_MIN_RADIUS);
+                mb.lifetimeSeconds = MICROBURST_MIN_LIFETIME
+                        + random.nextDouble() * (MICROBURST_MAX_LIFETIME - MICROBURST_MIN_LIFETIME);
+                mb.strength01 = 0.5 + 0.5 * Math.min(1.0, stormAct);
+                mb.groundY = ctx.terrain().heightAt(mbX, mbZ);
                 l.microbursts.add(mb);
             }
             l.microbursts.removeIf(mb -> {
@@ -135,17 +181,12 @@ public class SquallLineSystem implements WeatherPhenomenon {
         }
     }
 
+    /** 闪电沿线的方向分布（WX-SQ-02 确认这点本来就是对的），门控交给 {@link LightningGate}。 */
     private void strikeLightning(ServerLevel level, SquallLine l) {
         double t = random.nextDouble();
         int bx = (int) (l.x1 + (l.x2 - l.x1) * t + (random.nextDouble() - 0.5) * 80);
         int bz = (int) (l.z1 + (l.z2 - l.z1) * t + (random.nextDouble() - 0.5) * 80);
-        var surface = level.getHeightmapPos(
-                net.minecraft.world.level.levelgen.Heightmap.Types.WORLD_SURFACE,
-                new net.minecraft.core.BlockPos(bx, 0, bz));
-        var bolt = net.minecraft.world.entity.EntityType.LIGHTNING_BOLT.create(level);
-        if (bolt == null) return;
-        bolt.moveTo(surface.getX(), surface.getY(), surface.getZ());
-        level.addFreshEntity(bolt);
+        LightningGate.strike(level, bx, bz);
     }
 
     private ServerPlayer pickAnchor(ServerLevel level) {
@@ -164,40 +205,82 @@ public class SquallLineSystem implements WeatherPhenomenon {
             double ahead = (x - px) * n[0] + (z - pz) * n[1]; // >0 表示在线前侧
             double e = l.intensity01;
 
-            if (d < 90) {
-                // 对流线核心：强降水 + 大湍流
-                double core = Math.exp(-(d * d) / (60 * 60));
-                acc = acc.add(new WindContribution(0, -2.0 * core * e, 0,
-                        0.5 * core * e, 0.95 * e));
+            // AGL：冷池是地面驱动现象，随高度衰减（WX-SQ-01 的核心）
+            double agl = Math.max(0.0, y - l.groundY);
+            double hDecay = Math.exp(-agl / GUST_HEIGHT_SCALE);
+
+            // 对流线核心：强降水 + 大湍流。距离也用 smoothstep 收口，不在 90 处硬切。
+            double coreTaper = smoothstepFalloff(d, 90.0);
+            if (coreTaper > 0) {
+                double core = Math.exp(-(d * d) / (60 * 60)) * coreTaper;
+                acc = acc.add(new WindContribution(0, -2.0 * core * e * hDecay, 0,
+                        0.5 * core * e, 0.95 * e * coreTaper));
             }
-            if (ahead > 0 && ahead < 160) {
-                double gust = 18.0 * Math.exp(-ahead / 90.0) * e;
-                acc = acc.add(new WindContribution(
-                        n[0] * gust, 0.3 * gust * 0.3, n[1] * gust,
-                        0.4 * Math.exp(-ahead / 90.0) * e, 0.3 * e));
+
+            if (ahead > 0) {
+                // 阵风锋（线前）：smoothstep 在 GUST_FRONT_RANGE 处收敛到 0
+                double frontTaper = smoothstepFalloff(ahead, GUST_FRONT_RANGE);
+                if (frontTaper > 0) {
+                    double gust = 18.0 * Math.exp(-ahead / 90.0) * e * frontTaper
+                            * hDecay;
+                    // 真实飑线前缘是强上升，w ≈ 0.3–0.5·U（旧实现 0.09·gust）
+                    double wy = 0.35 * gust * Math.exp(-agl / 500.0);
+                    acc = acc.add(new WindContribution(
+                            n[0] * gust, wy, n[1] * gust,
+                            0.4 * Math.exp(-ahead / 90.0) * e * frontTaper,
+                            0.3 * e * frontTaper));
+                }
+            } else {
+                // 冷池出流（线后）：旧实现这里是完全静风，缺了飑线最典型的"线后强风"
+                double rear = -ahead; // >0
+                double rearTaper = smoothstepFalloff(rear, COLD_POOL_REAR_RANGE);
+                if (rearTaper > 0) {
+                    double gust = 10.0 * Math.exp(-rear / 60.0) * e * rearTaper * hDecay;
+                    acc = acc.add(new WindContribution(
+                            n[0] * gust, -0.1 * gust, n[1] * gust,
+                            0.25 * e * rearTaper, 0.45 * e * rearTaper));
+                }
             }
-            // 下击暴流
+
+            // 下击暴流：下沉核 + 触地外流，两者都按 AGL 与半径收口
             for (Microburst mb : l.microbursts) {
                 double mdx = x - mb.x, mdz = z - mb.z;
                 double mr = Math.sqrt(mdx * mdx + mdz * mdz);
-                if (mr > mb.radiusBlocks * 2.5) continue;
-                double menv = mb.envelope() * e;
+                double menv = mb.envelope() * e * mb.strength01;
+                if (menv <= 0) continue;
+                double magl = Math.max(0.0, y - mb.groundY);
                 if (mr < mb.radiusBlocks) {
-                    double core = 1 - mr / mb.radiusBlocks;
-                    acc = acc.add(new WindContribution(0, -10.0 * core * menv, 0,
-                            0.5 * core * menv, 0.6 * menv));
+                    // 下沉核：只在柱体下半段（触地后），上部是云底的下沉气流
+                    double core = 1 - (mr / mb.radiusBlocks) * (mr / mb.radiusBlocks);
+                    double vDecay = Math.exp(-magl / 400.0);
+                    acc = acc.add(new WindContribution(0, -10.0 * core * menv * vDecay, 0,
+                            0.5 * core * menv, 0.6 * menv * core));
                 } else {
-                    // 下沉气流砸到地面，向外流
+                    // 触地外流：径向向外，靠近地面最强
+                    double outTaper = mb.outflowTaper(mr);
+                    if (outTaper <= 0) continue;
                     double ring = (mr - mb.radiusBlocks) / (mb.radiusBlocks * 1.5);
-                    double out = 14.0 * Math.sin(Math.min(1, ring) * Math.PI) * menv;
+                    double out = 14.0 * Math.sin(Math.min(1, ring) * Math.PI) * menv
+                            * outTaper * Math.exp(-magl / 200.0);
                     double inv = mr > 0.5 ? 1.0 / mr : 0;
                     acc = acc.add(new WindContribution(
                             mdx * inv * out, 0, mdz * inv * out,
-                            0.35 * menv, 0.2 * menv));
+                            0.35 * menv * outTaper, 0.2 * menv * outTaper));
                 }
             }
         }
         return acc;
+    }
+
+    /**
+     * 线性收口：{@code r=0} 为 1，{@code r=range} 处为 0，中间平滑。
+     * 用于取代 {@code if (d < 90)} / {@code if (ahead < 160)} 这类硬边界（SYS-05）。
+     */
+    private static double smoothstepFalloff(double r, double range) {
+        if (r >= range) return 0.0;
+        if (r <= 0) return 1.0;
+        double t = r / range;
+        return 1.0 - t * t * (3.0 - 2.0 * t);
     }
 
     private static double projectionT(SquallLine l, double x, double z) {
