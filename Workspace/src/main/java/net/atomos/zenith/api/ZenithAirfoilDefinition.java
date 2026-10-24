@@ -58,12 +58,19 @@ public final class ZenithAirfoilDefinition {
         ZenithAirfoilCoordinate lead = coordinates.get(0);
         ZenithAirfoilCoordinate trail = coordinates.get(upperCount - 1);
         if (Math.abs(lead.x()) > 0.05 || Math.abs(trail.x() - 1.0) > 0.05) return false;
-        // 上表面 x 单调不减，下表面 x 单调不增
+        // 上表面 x 单调不减，下表面 x 单调不增。
+        //
+        // 容差 1e-2 是必需的：NACA 点按**表面法向**偏移生成，前缘附近
+        // x 会被 yt·sinθ 往负方向拉一点（4412 的第 1 站 x ≈ −2.2e-4），
+        // 严格的 0 容差会让它误判成"点序不符"从而退回 2·max|y|（API-10）。
+        // 真正的乱序（下表面被排到前面）偏差是 O(0.1) 量级，1e-2 足够区分。
+        final double xTolerance = 1e-2;
         for (int i = 1; i < upperCount; i++) {
-            if (coordinates.get(i).x() < coordinates.get(i - 1).x() - 1e-9) return false;
+            if (coordinates.get(i).x() < coordinates.get(i - 1).x() - xTolerance) return false;
         }
         for (int i = 1; i < lowerCount; i++) {
-            if (coordinates.get(upperCount + i).x() > coordinates.get(upperCount + i - 1).x() + 1e-9) {
+            if (coordinates.get(upperCount + i).x()
+                    > coordinates.get(upperCount + i - 1).x() + xTolerance) {
                 return false;
             }
         }

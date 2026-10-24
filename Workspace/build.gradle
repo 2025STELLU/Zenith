@@ -49,10 +49,30 @@ neoForge {
             sourceSet(sourceSets.main)
         }
     }
+
+    // ENG-04：让 `gradlew test` 能在带 Minecraft 类路径的环境里跑纯 JVM 单测。
+    // 单测只碰不依赖 Minecraft 运行时的纯函数（L0/L1 网格、帆船物理、雾模型、
+    // 环面回绕、翼型几何、事件总线），不启动游戏、不加载世界。
+    unitTest {
+        enable()
+    }
 }
 
 sourceSets.main.resources { srcDir 'src/generated/resources' }
 
 dependencies {
     // 纯 NeoForge，无外部模组依赖
+
+    // ENG-04：单元测试（JUnit 5）。版本与 Gradle 缓存里已有的一致，离线可解析。
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.11.4'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.11.4'
+}
+
+// ENG-04：Gradle 9 起 `test` 默认不再自动发现 JUnit 平台，必须显式声明。
+tasks.named('test', Test) {
+    useJUnitPlatform()
+    testLogging {
+        events 'passed', 'skipped', 'failed'
+        exceptionFormat = 'full'
+    }
 }
