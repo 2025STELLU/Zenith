@@ -23,11 +23,13 @@ public class WindVaneRenderer implements BlockEntityRenderer<WindVaneBlockEntity
         pose.translate(0.5, 0, 0.5);
 
         VertexConsumer vc = buffers.getBuffer(ClientRenderHelper.FLAT_COLOR);
+        // CLI-09：直接用渲染管线给的打包光照（getLightColor 已经算好，别自己再查一次）
+        int packedLight = light;
 
         // 杆
         ClientRenderHelper.renderBox(pose, vc,
                 -0.03f, 0f, -0.03f, 0.03f, 1.0f, 0.03f,
-                0.35f, 0.35f, 0.38f, 1f);
+                0.35f, 0.35f, 0.38f, 1f, packedLight);
 
         // 箭头（绕 Y 旋转）
         pose.pushPose();
@@ -41,22 +43,22 @@ public class WindVaneRenderer implements BlockEntityRenderer<WindVaneBlockEntity
         // 箭杆
         ClientRenderHelper.renderBox(pose, vc,
                 -0.02f, -0.02f, -0.35f, 0.02f, 0.02f, 0.35f,
-                0.85f, 0.2f, 0.2f, 1f);
+                0.85f, 0.2f, 0.2f, 1f, packedLight);
         // 箭头（+Z 为箭头方向）
         ClientRenderHelper.renderTriangle(pose, vc,
                 0, -0.02f, 0.35f,
                 -0.09f, -0.02f, 0.18f,
                 0.09f, -0.02f, 0.18f,
-                0.9f, 0.25f, 0.25f, 1f);
+                0.9f, 0.25f, 0.25f, 1f, packedLight);
         ClientRenderHelper.renderTriangle(pose, vc,
                 0, 0.02f, 0.35f,
                 0.09f, 0.02f, 0.18f,
                 -0.09f, 0.02f, 0.18f,
-                0.9f, 0.25f, 0.25f, 1f);
+                0.9f, 0.25f, 0.25f, 1f, packedLight);
         // 尾翼
         ClientRenderHelper.renderBox(pose, vc,
                 -0.015f, -0.09f, -0.35f, 0.015f, 0.09f, -0.22f,
-                0.85f, 0.2f, 0.2f, 1f);
+                0.85f, 0.2f, 0.2f, 1f, packedLight);
         pose.popPose();
 
         pose.popPose();

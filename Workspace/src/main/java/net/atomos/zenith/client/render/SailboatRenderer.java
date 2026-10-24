@@ -36,19 +36,21 @@ public class SailboatRenderer extends EntityRenderer<SailboatEntity> {
                     Mth.sin(hurt) * hurt * dmg / 10f * boat.getHurtDir()));
         }
         VertexConsumer vc = buffers.getBuffer(ClientRenderHelper.FLAT_COLOR);
+        // CLI-09：直接用渲染管线给的打包光照（EntityRenderer 已经把船所在位置的光照算好）
+        int packedLight = light;
 
         // 船体
         ClientRenderHelper.renderBox(pose, vc,
                 -0.55f, 0f, -0.9f, 0.55f, 0.45f, 0.9f,
-                0.42f, 0.28f, 0.16f, 1f);
+                0.42f, 0.28f, 0.16f, 1f, packedLight);
         // 船舷
         ClientRenderHelper.renderBox(pose, vc,
                 -0.62f, 0.35f, -0.95f, 0.62f, 0.6f, 0.95f,
-                0.35f, 0.22f, 0.12f, 1f);
+                0.35f, 0.22f, 0.12f, 1f, packedLight);
         // 桅杆
         ClientRenderHelper.renderBox(pose, vc,
                 -0.05f, 0.45f, -0.05f, 0.05f, 2.6f, 0.05f,
-                0.3f, 0.2f, 0.12f, 1f);
+                0.3f, 0.2f, 0.12f, 1f, packedLight);
         // 帆（三角，帆 trim 影响张角示意）
         float trim = boat.getSailTrim();
         float belly = 0.12f + trim * 0.25f;
@@ -56,7 +58,7 @@ public class SailboatRenderer extends EntityRenderer<SailboatEntity> {
                 0.02f, 2.55f, 0f,          // 帆顶
                 0.02f, 0.6f, 0.1f,         // 帆脚前
                 0.02f + belly, 1.5f, -1.15f, // 帆脚后（鼓出）
-                0.92f, 0.88f, 0.82f, 1f);
+                0.92f, 0.88f, 0.82f, 1f, packedLight);
 
         pose.popPose();
         super.render(boat, yaw, partialTick, pose, buffers, light);

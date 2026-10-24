@@ -17,27 +17,25 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 龙卷漏斗：32×20 的三角网格，一次 draw call 画完。
+ * 龙卷漏斗：三角形网格，按距离三档 LOD，双 pass 半透明。
  *
- * <p><b>CLI-14 修正</b>：
- * <ul>
- *   <li>以前固定 {@code 32 × 20 = 640 quad}，{@code CULL_DIST = 256} 内**全部**提交，
- *       且每个顶点都去查 {@code RenderSystem} 的雾参数。现在按距离分三档 LOD：
- *       <ul>
- *         <li>≤ 64 格：20 层 × 32 段（全精度）</li>
- *         <li>≤ 128 格：12 层 × 20 段</li>
- *         <li>≤ 256 格：8 层 × 12 段</li>
- *       </ul>
- *       64 格外的漏斗在屏幕上不到 60 像素高，12 段已经看不出棱角。</li>
- *   <li>雾参数每帧只取一次（{@code FogParams}），不再每顶点 4 次 JNI 调用。</li>
- *   <li>不再自带 {@code @EventBusSubscriber}，改由 {@code ZenithClientSetup} 在
- *       {@code FMLClientSetupEvent} 里注册到 {@code NeoForge.EVENT_BUS}
- *       ——"世界里的临时几何体"由客户端初始化统一接线，找入口只需看一个文件。</li>
- *   <li>顶点/深度缓冲改成可复用的静态 scratch（渲染线程单线程访问），
- *       每帧不再分配 7 个二维数组。</li>
- * </ul>
+ * <p><b>CLI-14</b>：以前固定 {@code 32 × 20 = 640 quad}、{@code CULL_DIST = 256} 内全部提交，
+ * 且每个顶点都去查 {@code RenderSystem} 的雾参数。现在按距离分三档 LOD，
+ * 雾参数每帧只取一次，顶点/深度缓冲改成可复用的静态 scratch，
+ * 事件注册移到 {@code ZenithClientSetup} 统一接线。
  *
- * <p>mesh 用的是 POSITION_COLOR shader，不需要 GLSL 与贴图。
+ * <p><b>CLI-07</b>：单 pass 下无论怎么按 quad 质心排序，凹形圆柱都会有自遮挡伪影——
+ * 远侧内壁和近侧外壁在同一个 draw call 里交替，先画的被后画的半透明面盖住。
+ * 现在拆成两趟：
+ * <ol>
+ *   <li><b>背面 pass</b>：只画"我们看见其内壁"的 quad（远侧），由远到近；</li>
+ *   <li><b>正面 pass</b>：只画"我们看见其外壁"的 quad（近侧），由远到近。</li>
+ * </ol>
+ * 两趟之间 {@code endBatch}，保证整层背面的混合结果先落屏，再叠正面。
+ * 判定用 quad 外法线与"quad→相机"点积，相机走进漏斗内部时自动翻面。
+ *
+ * <p><b>CLI-09</b>：顶点带打包光照（{@code POSITION_COLOR_LIGHTMAP}），
+ * 夜里的漏斗不再是一团自发光的灰。
  */
 public final class TornadoRenderer {
     private TornadoRenderer() {}
@@ -73,6 +71,7 @@ public final class TornadoRenderer {
     private static final float[][] CB = new float[MAX_H][MAX_R];
     private static final float[][] CA = new float[MAX_H][MAX_R];
     private static final float[] QUAD_DEPTH = new float[NEAR_HEIGHT_SEGS * NEAR_RADIAL_SEGS];
+    private static final boolean[] QUAD_BACK = new boolean[NEAR_HEIGHT_SEGS * NEAR_RADIAL_SEGS];
     private static final int[] QUAD_ORDER = new int[NEAR_HEIGHT_SEGS * NEAR_RADIAL_SEGS];
 
     /** 一帧的雾参数：每个顶点都要用，但没必要每顶点查一次 RenderSystem。 */
@@ -100,7 +99,6 @@ public final class TornadoRenderer {
         Minecraft mc = Minecraft.getInstance();
         PoseStack pose = event.getPoseStack();
         var buffers = mc.renderBuffers().bufferSource();
-        VertexConsumer vc = buffers.getBuffer(ClientRenderHelper.FLAT_TRANSLUCENT);
 
         pose.pushPose();
         pose.translate(-camPos.x, -camPos.y, -camPos.z);
@@ -123,15 +121,37 @@ public final class TornadoRenderer {
             double groundY = level.getHeight(Heightmap.Types.MOTION_BLOCKING, (int) t.x(), (int) t.z());
             float height = 60.0f + 40.0f * t.intensity01();   // 60~100 格
             float rotPhase = timeSec * ROT_SPEED * t.spin();
+            // CLI-09：漏斗底部（贴地、玩家看得最清的那一段）的光照。
+            // 整个漏斗用同一个值是有意的：逐顶点查光照要走 20×32 次区块查询，
+            // 而漏斗本身是半透明的"烟柱"，高度方向的光照渐变在视觉上分辨不出来。
+            int light = ClientRenderHelper.packedLightAt(level, t.x(), groundY + 2.0, t.z());
 
-            renderFunnel(pose, vc, (float) t.x(), (float) groundY, (float) t.z(),
-                    height, rotPhase, t.intensity01(), fog, heightSegs, radialSegs);
-            renderDustRing(pose, vc, (float) t.x(), (float) groundY, (float) t.z(),
-                    rotPhase, t.intensity01(), fog);
+            buildFunnelMesh((float) t.x(), (float) groundY, (float) t.z(), height, rotPhase,
+                    t.intensity01(), heightSegs, radialSegs,
+                    (float) camPos.x, (float) camPos.y, (float) camPos.z);
+
+            Matrix4f m = pose.last().pose();
+
+            // 第一趟：背面（远侧内壁），由远到近
+            VertexConsumer vc = buffers.getBuffer(ClientRenderHelper.FLAT_TRANSLUCENT);
+            submitFunnel(vc, m, heightSegs, radialSegs, fog, light, true,
+                    (float) camPos.x, (float) camPos.y, (float) camPos.z);
+            buffers.endBatch(ClientRenderHelper.FLAT_TRANSLUCENT);
+
+            // 第二趟：正面（近侧外壁），由远到近
+            vc = buffers.getBuffer(ClientRenderHelper.FLAT_TRANSLUCENT);
+            submitFunnel(vc, m, heightSegs, radialSegs, fog, light, false,
+                    (float) camPos.x, (float) camPos.y, (float) camPos.z);
+            buffers.endBatch(ClientRenderHelper.FLAT_TRANSLUCENT);
+
+            // 地面尘环：贴在 y+0.5 的水平面，双面画，单 pass 就够
+            vc = buffers.getBuffer(ClientRenderHelper.FLAT_TRANSLUCENT);
+            renderDustRing(vc, m, (float) t.x(), (float) groundY, (float) t.z(),
+                    rotPhase, t.intensity01(), fog, light,
+                    (float) camPos.x, (float) camPos.y, (float) camPos.z);
+            buffers.endBatch(ClientRenderHelper.FLAT_TRANSLUCENT);
         }
         pose.popPose();
-        // 这是世界空间的临时几何体，必须在自己的阶段内 flush
-        buffers.endBatch(ClientRenderHelper.FLAT_TRANSLUCENT);
     }
 
     private static FogParams captureFog(Vec3 camPos) {
@@ -147,11 +167,18 @@ public final class TornadoRenderer {
         return dx * dx + dz * dz;
     }
 
-    /** 漏斗 mesh：先建顶点，再按到相机的距离从远到近提交 quad。 */
-    private static void renderFunnel(PoseStack pose, VertexConsumer vc,
-                                     float cx, float baseY, float cz,
-                                     float height, float rotPhase, float intensity,
-                                     FogParams fog, int heightSegs, int radialSegs) {
+    /**
+     * 建漏斗顶点 + 每个 quad 的深度与正/背面标记。
+     *
+     * <p>顶点是**世界坐标**（{@code pose} 已经平移了 {@code -camPos}，相机在原点），
+     * 所以判正/背面时必须先把 quad 质心搬到相机空间再与法线点积。
+     *
+     * @param camX,camY,camZ 相机世界坐标（把顶点搬到相机空间用）
+     */
+    private static void buildFunnelMesh(float cx, float baseY, float cz,
+                                        float height, float rotPhase, float intensity,
+                                        int heightSegs, int radialSegs,
+                                        float camX, float camY, float camZ) {
         for (int j = 0; j <= heightSegs; j++) {
             float frac = (float) j / heightSegs;               // 0=底 1=顶
             float radius = BOTTOM_R + (TOP_R - BOTTOM_R) * frac;
@@ -179,15 +206,25 @@ public final class TornadoRenderer {
             }
         }
 
-        // quad 排序：远的先画（透明体后画的覆盖先画的）。
-        // pose 已把相机平移到原点，所以顶点坐标本身就是"相机相对坐标"。
         int quadCount = heightSegs * radialSegs;
         for (int q = 0; q < quadCount; q++) {
             int j = q / radialSegs, i = q % radialSegs;
             float qx = (PX[j][i] + PX[j + 1][i] + PX[j + 1][i + 1] + PX[j][i + 1]) * 0.25f;
             float qy = (PY[j][i] + PY[j + 1][i] + PY[j + 1][i + 1] + PY[j][i + 1]) * 0.25f;
             float qz = (PZ[j][i] + PZ[j + 1][i] + PZ[j + 1][i + 1] + PZ[j][i + 1]) * 0.25f;
-            QUAD_DEPTH[q] = qx * qx + qy * qy + qz * qz;
+            // 深度用相机空间（pose 里相机已在原点）
+            float rx = qx - camX, ry = qy - camY, rz = qz - camZ;
+            QUAD_DEPTH[q] = rx * rx + ry * ry + rz * rz;
+
+            // 外法线（水平径向，从漏斗轴指向 quad）与 "quad→相机"（相机在原点，故为 −quad）的点积。
+            // > 0：相机在这块的外侧 → 正面；< 0：看到的是内壁 → 背面。
+            float nx = qx - cx, nz = qz - cz;
+            float nl = (float) Math.sqrt(nx * nx + nz * nz);
+            if (nl < 1e-5f) {
+                QUAD_BACK[q] = false;
+            } else {
+                QUAD_BACK[q] = (nx / nl) * (-rx) + (nz / nl) * (-rz) <= 0;
+            }
             QUAD_ORDER[q] = q;
         }
         // 插入排序：最多 640 个 quad，几乎已经接近有序
@@ -201,33 +238,40 @@ public final class TornadoRenderer {
             }
             QUAD_ORDER[b + 1] = key;
         }
+    }
 
-        Matrix4f m = pose.last().pose();
+    /** 提交一趟：只画 {@code back} 指定的那一侧，由远到近。 */
+    private static void submitFunnel(VertexConsumer vc, Matrix4f m,
+                                     int heightSegs, int radialSegs,
+                                     FogParams fog, int light, boolean back,
+                                     float camX, float camY, float camZ) {
+        int quadCount = heightSegs * radialSegs;
         for (int qi = 0; qi < quadCount; qi++) {
             int q = QUAD_ORDER[qi];
+            if (QUAD_BACK[q] != back) continue;
             int j = q / radialSegs, i = q % radialSegs;
-            vert(vc, m, PX[j][i], PY[j][i], PZ[j][i], CR[j][i], CG[j][i], CB[j][i], CA[j][i], fog);
+            vert(vc, m, PX[j][i], PY[j][i], PZ[j][i], CR[j][i], CG[j][i], CB[j][i], CA[j][i], fog, light, camX, camY, camZ);
             vert(vc, m, PX[j + 1][i], PY[j + 1][i], PZ[j + 1][i],
-                    CR[j + 1][i], CG[j + 1][i], CB[j + 1][i], CA[j + 1][i], fog);
+                    CR[j + 1][i], CG[j + 1][i], CB[j + 1][i], CA[j + 1][i], fog, light, camX, camY, camZ);
             vert(vc, m, PX[j + 1][i + 1], PY[j + 1][i + 1], PZ[j + 1][i + 1],
-                    CR[j + 1][i + 1], CG[j + 1][i + 1], CB[j + 1][i + 1], CA[j + 1][i + 1], fog);
-            vert(vc, m, PX[j][i], PY[j][i], PZ[j][i], CR[j][i], CG[j][i], CB[j][i], CA[j][i], fog);
+                    CR[j + 1][i + 1], CG[j + 1][i + 1], CB[j + 1][i + 1], CA[j + 1][i + 1], fog, light, camX, camY, camZ);
+            vert(vc, m, PX[j][i], PY[j][i], PZ[j][i], CR[j][i], CG[j][i], CB[j][i], CA[j][i], fog, light, camX, camY, camZ);
             vert(vc, m, PX[j + 1][i + 1], PY[j + 1][i + 1], PZ[j + 1][i + 1],
-                    CR[j + 1][i + 1], CG[j + 1][i + 1], CB[j + 1][i + 1], CA[j + 1][i + 1], fog);
+                    CR[j + 1][i + 1], CG[j + 1][i + 1], CB[j + 1][i + 1], CA[j + 1][i + 1], fog, light, camX, camY, camZ);
             vert(vc, m, PX[j][i + 1], PY[j][i + 1], PZ[j][i + 1],
-                    CR[j][i + 1], CG[j][i + 1], CB[j][i + 1], CA[j][i + 1], fog);
+                    CR[j][i + 1], CG[j][i + 1], CB[j][i + 1], CA[j][i + 1], fog, light, camX, camY, camZ);
         }
     }
 
     /** 地面尘环：6 条旋转条纹。 */
-    private static void renderDustRing(PoseStack pose, VertexConsumer vc,
+    private static void renderDustRing(VertexConsumer vc, Matrix4f m,
                                        float cx, float baseY, float cz,
-                                       float rotPhase, float intensity, FogParams fog) {
+                                       float rotPhase, float intensity, FogParams fog, int light,
+                                       float camX, float camY, float camZ) {
         int segs = 24;
         float innerR = 5.0f, outerR = 14.0f;
         float y = baseY + 0.5f;
         float aScale = 0.5f + 0.5f * intensity;
-        Matrix4f m = pose.last().pose();
 
         for (int i = 0; i < segs; i++) {
             float a0 = (float) i / segs * (float) (Math.PI * 2);
@@ -243,12 +287,12 @@ public final class TornadoRenderer {
 
             float c0 = (float) Math.cos(a0), s0 = (float) Math.sin(a0);
             float c1 = (float) Math.cos(a1), s1 = (float) Math.sin(a1);
-            vert(vc, m, cx + c0 * innerR, y, cz + s0 * innerR, BASE_R, BASE_G, BASE_B, aInner, fog);
-            vert(vc, m, cx + c0 * outerR, y, cz + s0 * outerR, BASE_R, BASE_G, BASE_B, aOuter, fog);
-            vert(vc, m, cx + c1 * outerR, y, cz + s1 * outerR, BASE_R, BASE_G, BASE_B, aOuter, fog);
-            vert(vc, m, cx + c0 * innerR, y, cz + s0 * innerR, BASE_R, BASE_G, BASE_B, aInner, fog);
-            vert(vc, m, cx + c1 * outerR, y, cz + s1 * outerR, BASE_R, BASE_G, BASE_B, aOuter, fog);
-            vert(vc, m, cx + c1 * innerR, y, cz + s1 * innerR, BASE_R, BASE_G, BASE_B, aInner, fog);
+            vert(vc, m, cx + c0 * innerR, y, cz + s0 * innerR, BASE_R, BASE_G, BASE_B, aInner, fog, light, camX, camY, camZ);
+            vert(vc, m, cx + c0 * outerR, y, cz + s0 * outerR, BASE_R, BASE_G, BASE_B, aOuter, fog, light, camX, camY, camZ);
+            vert(vc, m, cx + c1 * outerR, y, cz + s1 * outerR, BASE_R, BASE_G, BASE_B, aOuter, fog, light, camX, camY, camZ);
+            vert(vc, m, cx + c0 * innerR, y, cz + s0 * innerR, BASE_R, BASE_G, BASE_B, aInner, fog, light, camX, camY, camZ);
+            vert(vc, m, cx + c1 * outerR, y, cz + s1 * outerR, BASE_R, BASE_G, BASE_B, aOuter, fog, light, camX, camY, camZ);
+            vert(vc, m, cx + c1 * innerR, y, cz + s1 * innerR, BASE_R, BASE_G, BASE_B, aInner, fog, light, camX, camY, camZ);
         }
     }
 
@@ -260,9 +304,12 @@ public final class TornadoRenderer {
     private static void vert(VertexConsumer vc, Matrix4f m,
                              float x, float y, float z,
                              float r, float g, float b, float a,
-                             FogParams fog) {
-        // POSITION_COLOR 格式不带法线，雾只能自己算
-        float dx = x, dy = y, dz = z; // pose 已经把相机平移到原点
+                             FogParams fog, int light,
+                             float camX, float camY, float camZ) {
+        // 雾按相机相对坐标手算（顶点格式里没有雾坐标）。
+        // 顶点本身是世界坐标，必须减去相机位置——旧实现直接拿世界坐标当相机坐标，
+        // 于是雾浓度只取决于"离世界原点多远"，走远一点漏斗就整个被雾吃掉。
+        float dx = x - camX, dy = y - camY, dz = z - camZ;
         float dist;
         if (fog.cylinder()) {
             dist = Math.max((float) Math.hypot(dx, dz), Math.abs(dy));
@@ -279,6 +326,8 @@ public final class TornadoRenderer {
             b = Mth.lerp(f, b, fog.b());
             a *= 1.0f - f * 0.8f;
         }
-        vc.addVertex(m, x, y, z).setColor(r, g, b, a);
+        vc.addVertex(m, x, y, z)
+                .setColor(r, g, b, a)
+                .setUv2(light & 0xFFFF, (light >> 16) & 0xFFFF);
     }
 }
