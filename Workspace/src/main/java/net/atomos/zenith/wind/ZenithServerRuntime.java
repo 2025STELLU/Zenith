@@ -34,6 +34,7 @@ import net.atomos.zenith.weather.ThermalSystem;
 import net.atomos.zenith.weather.TornadoSystem;
 import net.atomos.zenith.weather.TyphoonSystem;
 import net.atomos.zenith.weather.WeatherContext;
+import net.atomos.zenith.weather.WeatherCycleBridge;
 import net.atomos.zenith.weather.WeatherPhenomenon;
 import net.atomos.zenith.weather.WindContribution;
 import net.minecraft.core.BlockPos;
@@ -132,6 +133,8 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
         final TornadoSystem tornadoes;
         final MountainWaveSystem mountainWaves;
         final MonsoonSystem monsoon;
+        /** 把模组降水写回原版天气状态机（WX-SC-04）。 */
+        final WeatherCycleBridge weatherCycle = new WeatherCycleBridge();
         final HashedSeedTerrainProvider hashedTerrain;
         McTerrainAdapter terrainAdapter;
         LocalFlowSolver l2;
@@ -397,8 +400,17 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
             for (WeatherPhenomenon p : s.phenomena()) {
                 if (phenomenonEnabled(p)) p.tick(level, dt, ctx);
             }
+            // 台风如果被配置关掉，别把上一 tick 的足迹留在 L0 里（WX-TY-06）
+            if (!net.atomos.zenith.ZenithConfig.enableTyphoon()) {
+                s.typhoons.clearExternalVortices(s.driver);
+            }
+            // WX-SC-04：把现象层的降水/湍流写回原版天气状态机。
+            // 放在现象 tick 之后，拿的是本 tick 的最新位置。
+            s.weatherCycle.tick(level, s.phenomena(), ZenithServerRuntime::phenomenonEnabled);
         } else {
             s.driver.setBaseFlowBias(null);
+            s.typhoons.clearExternalVortices(s.driver);
+            s.weatherCycle.tick(level, java.util.List.of(), p -> false);
         }
 
         // 3) L0 刷新

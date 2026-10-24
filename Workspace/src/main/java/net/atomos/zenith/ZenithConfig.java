@@ -49,6 +49,7 @@ public final class ZenithConfig {
 
         public final ModConfigSpec.BooleanValue weatherInNether;
         public final ModConfigSpec.BooleanValue weatherInEnd;
+        public final ModConfigSpec.BooleanValue weatherOverridesVanillaRain;
 
         public final ModConfigSpec.BooleanValue southernHemisphere;
 
@@ -93,6 +94,12 @@ public final class ZenithConfig {
             weatherInEnd = b
                     .comment("在末地也跑天气系统。默认 false。")
                     .define("weatherInEnd", false);
+            weatherOverridesVanillaRain = b
+                    .comment("把模组降水强度写回原版 rainLevel / thunderLevel（WX-SC-04）。",
+                            "开启后雷暴单体/台风的范围降水会真的下雨、真的打雷；",
+                            "原版天气仍在跑，两者取较大值，模组只会加强不会抹掉原版雨。",
+                            "关闭后模组降水只存在于风场采样与粒子里，天空不会变阴。")
+                    .define("weatherOverridesVanillaRain", true);
             b.pop();
 
             b.comment("半球").push("hemisphere");
@@ -169,6 +176,9 @@ public final class ZenithConfig {
 
     public static boolean weatherInNether() { return safe(() -> SERVER.weatherInNether.get(), false); }
     public static boolean weatherInEnd() { return safe(() -> SERVER.weatherInEnd.get(), false); }
+    public static boolean weatherOverridesVanillaRain() {
+        return safe(() -> SERVER.weatherOverridesVanillaRain.get(), true);
+    }
 
     public static boolean southernHemisphere() {
         return safe(() -> SERVER.southernHemisphere.get(), false);

@@ -47,6 +47,51 @@ public class WorldScaleDriver {
     /** 上述足迹中心的气压亏损（Pa），比气旋小两个量级。 */
     public static final double TORNADO_L0_PRESSURE_PA = 90.0;
 
+    /**
+     * 台风写回 L0 的气压亏损上限（Pa，WX-TY-06）。
+     *
+     * <p>Holland 反解出来的真实中心气压亏损能到 4–6 kPa，但 L0 网格间距是 256 格，
+     * 根本分辨不了 30–80 格的眼墙。把真实亏损直接灌进 256 格网格，地转风会算出
+     * 100 m/s 量级再被 {@code MAX_DYNAMIC_WIND_MPS} 砍成 18 m/s，于是台风周围出现
+     * 一圈假的 18 m/s 背景风，而现象层又叠了一次 40 m/s 的真实环流。
+     * 这里和现有 {@link #CYCLONE_CELL_MAX_PRESSURE_ANOMALY_PA} 对齐：L0 只承载
+     * **大尺度**低压，产生 5–8 m/s 的引导气流；真实核心环流仍由现象层逐点给出。
+     */
+    public static final double TYPHOON_L0_MAX_PRESSURE_PA = 1350.0;
+    /** 台风气压足迹的高斯 σ 相对影响半径的比例。 */
+    public static final double TYPHOON_L0_SIGMA_FRACTION = 0.40;
+    /** 台风写回 L0 的最大湿度增量（0..1）。 */
+    public static final double TYPHOON_L0_MAX_MOISTURE = 0.35;
+    /** 台风写回 L0 的最大暖心温度增量（K）。 */
+    public static final double TYPHOON_L0_MAX_WARM_CORE_K = 1.8;
+
+    /**
+     * 外部涡旋（WX-TY-06）：让台风进入 L0 的气压/温度/湿度收支。
+     *
+     * <p>台风此前只活在 {@code TyphoonSystem.sample()} 的点采样里，L0 的
+     * {@code pressureAnomalyPa}、{@code /zenith status} 的气压、API 的
+     * {@code pressureAnomalyPa} 全看不到它。这里让台风每 tick 把自己的大尺度足迹
+     * 挂进 L0：气压亏损、暖心、湿度。
+     *
+     * <p><b>不写风</b>：风已经由现象层逐点给出，再往 L0 灌一次就是双份；
+     * L0 的地转风会从气压场自然长出来（这正是 L0 网格的设计意图），
+     * 气压亏损被 {@link #TYPHOON_L0_MAX_PRESSURE_PA} 限住，所以那部分只有几 m/s。
+     */
+    public interface ExternalVortex {
+        /** 涡旋中心的方块 X。 */
+        double xBlocks();
+        /** 涡旋中心的方块 Z。 */
+        double zBlocks();
+        /** 影响半径（方块）。 */
+        double influenceRadiusBlocks();
+        /** 中心气压亏损（Pa，正数）。 */
+        double centralPressureDeficitPa();
+        /** 附加相对湿度（0..1）。 */
+        double moisture01();
+        /** 暖心温度异常（K）。 */
+        double warmCoreKelvin();
+    }
+
     /** 采样结果：L0 消费的全部强迫场。 */
     public record Sample(
             double targetWindX, double targetWindZ,
@@ -87,6 +132,12 @@ public class WorldScaleDriver {
     private final ZenithRandom random;
 
     private BaseFlowBias baseFlowBias;
+
+    /**
+     * 外部涡旋（WX-TY-06）：台风每 tick 把自己的大尺度足迹挂进来。
+     * 为空时零开销；由 {@link #setExternalVortices} 换引用，不复制。
+     */
+    private List<ExternalVortex> externalVortices = List.of();
 
     private double baseFlowX = 3.0;
     private double baseFlowZ = 0.5;
@@ -168,6 +219,17 @@ public class WorldScaleDriver {
     public void setBaseFlowBias(BaseFlowBias bias) {
         this.baseFlowBias = bias;
     }
+
+    /**
+     * 外部涡旋列表（WX-TY-06）：台风每 tick 用自己的 {@code typhoons()} 换进来。
+     * 传 {@code null} 或空表表示没有外部涡旋。引用保存，调用方不要就地修改列表。
+     */
+    public void setExternalVortices(List<ExternalVortex> vortices) {
+        this.externalVortices = vortices == null ? List.of() : vortices;
+    }
+
+    /** 当前外部涡旋数量（诊断用）。 */
+    public int externalVortexCount() { return externalVortices.size(); }
 
     /** 供 {@code TornadoSystem} 挑宿主：返回当前对流团的中心与半径（方块坐标）。 */
     public ConvectiveHost pickConvectiveHost(Random rnd) {
@@ -268,6 +330,26 @@ public class WorldScaleDriver {
             torHeat += 0.8 * s;
             torMoist += 0.05 * s;
             torUp = Math.max(torUp, 0.35 * s);
+        }
+
+        // 台风（WX-TY-06）：和龙卷同一思路——L0 只承载**大尺度**足迹。
+        // 台风中心气压亏损按 Holland 反解能到 4–6 kPa，但 256 格网格分辨不了 30–80 格的眼墙，
+        // 直接灌进去地转风会被 MAX_DYNAMIC_WIND_MPS 砍成 18 m/s 的假背景风；现象层已经逐点给出
+        // 真实环流，所以这里只取封顶后的亏损 + 暖心 + 湿度，**不写风**。
+        for (ExternalVortex v : externalVortices) {
+            double sigma = Math.max(1.0, v.influenceRadiusBlocks() * TYPHOON_L0_SIGMA_FRACTION);
+            // 最小镜像距离（DRV-01 同类）：台风用世界方块坐标，L0 是环面格点。
+            double dx = wrapDelta((cellBlockX - v.xBlocks()) / CELL_SIZE_BLOCKS, GRID_CELLS)
+                    * CELL_SIZE_BLOCKS;
+            double dz = wrapDelta((cellBlockZ - v.zBlocks()) / CELL_SIZE_BLOCKS, GRID_CELLS)
+                    * CELL_SIZE_BLOCKS;
+            double g = Math.exp(-(dx * dx + dz * dz) / (2.0 * sigma * sigma));
+            if (g < 1e-3) continue;
+            double deficit = Math.min(Math.max(0.0, v.centralPressureDeficitPa()),
+                    TYPHOON_L0_MAX_PRESSURE_PA);
+            pressure -= deficit * g;
+            tempBias += Math.max(0.0, v.warmCoreKelvin()) * g;
+            humidity += Math.max(0.0, v.moisture01()) * g;
         }
 
         // 按模长钳制：分量各自钳到 ±12 会让对角方向最到 17 m/s，并扭转风向（DRV-06）

@@ -3,6 +3,7 @@ package net.atomos.zenith.weather;
 import net.atomos.zenith.api.ZenithWeatherEvent;
 import net.atomos.zenith.api.ZenithWeatherEvents;
 import net.atomos.zenith.wind.HemisphereConvention;
+import net.atomos.zenith.wind.WorldScaleDriver;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
@@ -22,14 +23,20 @@ import java.util.List;
  * 边界层入流角随半径变化（眼墙 25°、远处 5°）。
  * 台风跟着引导气流走（×0.8），外加 β 漂移（往极地方向偏西 ~1.5 m/s）；
  * 一旦登陆就指数减弱——没了暖洋面供能，撑不了多久。
+ *
+ * <p><b>同时写回 L0</b>（WX-TY-06）：每 tick 把台风的**大尺度**足迹
+ * （中心气压亏损、暖心、湿度）挂到 {@link WorldScaleDriver#setExternalVortices}。
+ * 风本身仍只在 {@code sample()} 里逐点给出，避免现象层与 L0 叠两遍。
  */
 public class TyphoonSystem implements WeatherPhenomenon {
     public static final int MAX_TYPHOONS = 2;
     public static final int RAINBAND_ARMS = 3;
     /** Holland 廓线形状参数：1.0 = 很尖的眼墙，2.5 = 很宽的环流；1.5 居中。 */
     public static final double HOLLAND_B = 1.5;
+    /** 海平面空气密度（kg/m³），用于从 Vmax 反解中心气压亏损。 */
+    public static final double AIR_DENSITY_KG_M3 = 1.15;
 
-    public static final class Typhoon {
+    public static final class Typhoon implements WorldScaleDriver.ExternalVortex {
         public double x, z;
         public double vmaxMps = 40;       // 最大切向风速
         public double rmaxBlocks = 55;    // 最大风速半径
@@ -85,9 +92,45 @@ public class TyphoonSystem implements WeatherPhenomenon {
             if (t >= 1.0) return 0.0;
             return 1.0 - t * t * (3.0 - 2.0 * t);
         }
+
+        // ---- WX-TY-06：写回 L0 的大尺度足迹 ----
+
+        /**
+         * Holland 反解的中心气压亏损（Pa）。
+         *
+         * <p>由 {@code Vmax = sqrt(B·Δp/(ρ·e))} 得 {@code Δp = ρ·e·Vmax²/B}。
+         * 40 m/s 的台风约 3.3 kPa，55 m/s 约 6.2 kPa——与真实台风量级一致。
+         * 注意 L0 会按 {@link WorldScaleDriver#TYPHOON_L0_MAX_PRESSURE_PA} 封顶，
+         * 因为 256 格网格解析不了这个尺度（见该常量注释）。
+         */
+        public double centralPressureDeficitPa() {
+            double v = vmaxMps * intensity01;
+            return AIR_DENSITY_KG_M3 * Math.E * v * v / HOLLAND_B;
+        }
+
+        @Override public double xBlocks() { return x; }
+        @Override public double zBlocks() { return z; }
+        @Override public double influenceRadiusBlocks() { return influenceRadiusBlocks; }
+
+        /**
+         * 附加湿度：眼墙与雨带里最湿，眼区反而是干的（下沉逆温）。
+         *
+         * <p>L0 只有格点尺度，这里给的是"这一团有 0.3 的额外水汽"，
+         * 空间形状交给高斯足迹，眼区的干只体现在现象层的降水强度里。
+         */
+        @Override public double moisture01() {
+            return WorldScaleDriver.TYPHOON_L0_MAX_MOISTURE * intensity01;
+        }
+
+        /** 暖心：台风是暖心结构，中心比环境暖 1–2 K。 */
+        @Override public double warmCoreKelvin() {
+            return WorldScaleDriver.TYPHOON_L0_MAX_WARM_CORE_K * intensity01;
+        }
     }
 
     private final List<Typhoon> typhoons = new ArrayList<>();
+    /** WX-TY-06：给驱动器看的视图，避免每 tick 分配（元素是同一个对象）。 */
+    private final List<WorldScaleDriver.ExternalVortex> vortexView = new ArrayList<>();
     private final ZenithRandom random;
     private double spawnAccumulator = 0;
     private int nameCounter = 0;
@@ -181,6 +224,27 @@ public class TyphoonSystem implements WeatherPhenomenon {
                 it.remove();
             }
         }
+
+        // WX-TY-06：把大尺度足迹挂给 L0（气压/暖心/湿度）。风不重复写。
+        publishVortices(ctx.driver());
+    }
+
+    /**
+     * 把当前台风列表作为外部涡旋挂到 L0（WX-TY-06）。
+     *
+     * <p>复用同一个 {@link #vortexView} 容器：元素引用不变，只是长度跟着台风数走，
+     * 每 tick 不产生垃圾。驱动器只读不存，引用安全。
+     */
+    private void publishVortices(WorldScaleDriver driver) {
+        vortexView.clear();
+        vortexView.addAll(typhoons);
+        driver.setExternalVortices(vortexView.isEmpty() ? null : vortexView);
+    }
+
+    /** 卸载时清掉 L0 里的足迹（{@code enableTyphoon=false} 时由运行时调用）。 */
+    public void clearExternalVortices(WorldScaleDriver driver) {
+        vortexView.clear();
+        driver.setExternalVortices(null);
     }
 
     private ServerPlayer pickAnchor(ServerLevel level) {
