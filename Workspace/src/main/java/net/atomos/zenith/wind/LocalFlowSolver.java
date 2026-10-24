@@ -18,6 +18,17 @@ public class LocalFlowSolver {
         boolean isSolid(int x, int y, int z);
     }
 
+    /**
+     * 地面高度探针：返回该列**最高固体方块的 y**（没有方块返回 {@code minBuildHeight-1}）。
+     *
+     * <p>L2 的 9³ 扫描必须把"脚下这层地"排除在障碍物之外，否则平地上每一格地面都会
+     * 以 {@code push ∝ 1/d²} 把空气往上顶：{@code y=63} 的方块对 {@code y=65.6} 的采样点
+     * 贡献 11 m/s 的伪上升（L2-01）。允许为 {@code null}（无地面信息时退回旧行为）。
+     */
+    public interface GroundProbe {
+        int groundY(int x, int z);
+    }
+
     public record HeatSource(double x, double y, double z, double powerWatts, double radiusBlocks) {}
 
     public interface HeatProbe {
@@ -39,11 +50,21 @@ public class LocalFlowSolver {
     private final ObstacleProbe obstacles;
     private final HeatProbe heat;
     private final JetProbe jets;
+    private final GroundProbe ground;
 
     public LocalFlowSolver(ObstacleProbe obstacles, HeatProbe heat, JetProbe jets) {
+        this(obstacles, heat, jets, null);
+    }
+
+    /**
+     * @param ground 地面探测；给 {@code null} 时退回"所有固体都是障碍"的旧行为
+     *               （会把地面当障碍，平地出现伪上升，见 L2-01）
+     */
+    public LocalFlowSolver(ObstacleProbe obstacles, HeatProbe heat, JetProbe jets, GroundProbe ground) {
         this.obstacles = obstacles;
         this.heat = heat;
         this.jets = jets;
+        this.ground = ground;
     }
 
     /**
@@ -62,23 +83,47 @@ public class LocalFlowSolver {
             double dirX = baseX / baseSpeed, dirZ = baseZ / baseSpeed;
             int r = 4; // 9³ 扫描：格子数再大性能顶不住，再小绕流不准
             int bx = (int) Math.floor(x), by = (int) Math.floor(y), bz = (int) Math.floor(z);
+
+            // 局地地面：5×5 的最小值。地面是"支撑面"不是障碍物，
+            // 否则平地每一格地砖都在把空气往上顶（L2-01）。
+            int groundY = Integer.MIN_VALUE;
+            if (ground != null) {
+                int best = Integer.MAX_VALUE;
+                for (int gx = -2; gx <= 2; gx++)
+                    for (int gz = -2; gz <= 2; gz++) {
+                        int gy = ground.groundY(bx + gx, bz + gz);
+                        // MIN_VALUE = 该列未知/未加载：跳过，别让一列未加载把整片探针废掉
+                        if (gy != Integer.MIN_VALUE) best = Math.min(best, gy);
+                    }
+                groundY = best;
+            }
+
+            double pushX = 0, pushY = 0, pushZ = 0;
+            double wakeX = 0, wakeZ = 0;
             for (int dx = -r; dx <= r; dx++)
                 for (int dy = -r; dy <= r; dy++)
                     for (int dz = -r; dz <= r; dz++) {
-                        if (!obstacles.isSolid(bx + dx, by + dy, bz + dz)) continue;
+                        int sy = by + dy;
+                        // 地面及以下一律不算障碍：脚下那层地砖不是"绕流物体"
+                        if (sy <= groundY) continue;
+                        if (!obstacles.isSolid(bx + dx, sy, bz + dz)) continue;
                         double px = x - (bx + dx + 0.5);
-                        double py = y - (by + dy + 0.5);
+                        double py = y - (sy + 0.5);
                         double pz = z - (bz + dz + 0.5);
                         double d2 = px * px + py * py + pz * pz;
                         if (d2 < 0.25) { // 采样点在固体里，直接算遮蔽
                             sheltered = true;
                             continue;
                         }
+                        // 扫描边缘的窗函数：避免 9³ 边界上的硬切（0.6r 内权重=1，之后 smoothstep 收敛到 0）
+                        double edge = smoothstep((r + 0.5 - Math.sqrt(dx * dx + dy * dy + dz * dz)) / 1.5);
+                        if (edge <= 0) continue;
+
                         double d = Math.sqrt(d2);
-                        double push = Math.min(1.2, 1.0 / d2) * baseSpeed * 0.35;
-                        modX += px / d * push;
-                        modY += py / d * push * 0.7;
-                        modZ += pz / d * push;
+                        double push = Math.min(1.2, 1.0 / d2) * baseSpeed * 0.35 * edge;
+                        pushX += px / d * push;
+                        pushY += py / d * push * 0.7;
+                        pushZ += pz / d * push;
                         // 尾流亏损：下风方向的锥形区
                         double along = px * dirX + pz * dirZ; // >0 在方块下风侧
                         double across = Math.abs(px * dirZ - pz * dirX) + Math.abs(py) * 0.7;
@@ -86,13 +131,28 @@ public class LocalFlowSolver {
                             double coneR = 0.8 + along * 0.35;
                             if (across < coneR) {
                                 double deficit = Math.exp(-(across * across) / (coneR * coneR))
-                                        * Math.exp(-along / 9.0);
-                                modX -= dirX * baseSpeed * deficit * 0.55;
-                                modZ -= dirZ * baseSpeed * deficit * 0.55;
+                                        * Math.exp(-along / 9.0) * edge;
+                                wakeX -= dirX * baseSpeed * deficit * 0.55;
+                                wakeZ -= dirZ * baseSpeed * deficit * 0.55;
                                 if (deficit > 0.45) sheltered = true;
                             }
                         }
                     }
+
+            // 两项分别限幅：旧实现把 729 格贡献直接相加，平地也能凑出 11 m/s（L2-01）
+            double pushCap = 0.5 * baseSpeed;
+            double[] push = clampVec(pushX, pushY, pushZ, pushCap);
+            modX += push[0];
+            modY += push[1];
+            modZ += push[2];
+            double wakeCap = 0.9 * baseSpeed;
+            double wakeMag = Math.hypot(wakeX, wakeZ);
+            if (wakeMag > wakeCap) {
+                wakeX *= wakeCap / wakeMag;
+                wakeZ *= wakeCap / wakeMag;
+            }
+            modX += wakeX;
+            modZ += wakeZ;
         }
 
         // 热浮力
@@ -133,4 +193,19 @@ public class LocalFlowSolver {
     }
 
     private static double sqr(double v) { return v * v; }
+
+    /** 平滑窗：0..1 之间用 3t²−2t³。 */
+    private static double smoothstep(double t) {
+        if (t <= 0) return 0;
+        if (t >= 1) return 1;
+        return t * t * (3 - 2 * t);
+    }
+
+    /** 把三维向量按模长限幅。 */
+    private static double[] clampVec(double x, double y, double z, double cap) {
+        double m = Math.sqrt(x * x + y * y + z * z);
+        if (m <= cap || m <= 1e-9) return new double[]{x, y, z};
+        double s = cap / m;
+        return new double[]{x * s, y * s, z * s};
+    }
 }

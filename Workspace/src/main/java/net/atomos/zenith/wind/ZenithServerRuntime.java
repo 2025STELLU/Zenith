@@ -167,7 +167,16 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
                         return st.isSolid();
                     },
                     (x, y, z, r) -> heatNear(s, x, y, z, r),
-                    (x, y, z, r) -> JetSourceRegistry.jetsNear(level.dimension(), x, y, z, r));
+                    (x, y, z, r) -> JetSourceRegistry.jetsNear(level.dimension(), x, y, z, r),
+                    // 地面探针：MOTION_BLOCKING_NO_LEAVES 之上第一格，减 1 = 支撑面方块 y。
+                    // L2 用它把"脚下这层地"排除在障碍物之外，否则平地会顶出 11 m/s 伪上升（L2-01）
+                    (x, z) -> {
+                        ChunkAccess ca = s.terrainAdapter.chunkIfLoaded(x, z);
+                        if (ca == null) return Integer.MIN_VALUE; // 未加载：不猜，保持旧行为
+                        int h = ca.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES,
+                                x & 15, z & 15);
+                        return Math.max(h - 1, ca.getMinBuildHeight());
+                    });
             return s;
         });
     }
@@ -647,6 +656,11 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
             int cx = ((int) Math.floor(bx)) >> 4;
             int cz = ((int) Math.floor(bz)) >> 4;
             return level.getChunkSource().getChunk(cx, cz, ChunkStatus.FULL, false);
+        }
+
+        /** 供 L2 地面探针复用（包内可见）：方块坐标 → 已加载区块，未加载返回 {@code null}。 */
+        ChunkAccess chunkIfLoaded(int bx, int bz) {
+            return chunkIfLoaded((double) bx, (double) bz);
         }
 
         /**
