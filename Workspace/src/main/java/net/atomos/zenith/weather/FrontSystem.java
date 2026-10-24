@@ -21,6 +21,30 @@ public class FrontSystem implements WeatherPhenomenon {
     public static final double MIN_LIFETIME_SECONDS = 7200;
     public static final double MAX_EXTRA_LIFETIME_SECONDS = 7200;
 
+    /**
+     * 锋线相对槽线的倾斜角（WX-FRONT-01）。真实锋面很少严格垂直等压线：
+     * 冷锋向后倾斜约 15°，暖锋向前倾斜同样的角度。
+     */
+    public static final double COLD_WARM_SKEW_RADIANS = Math.toRadians(15);
+
+    /**
+     * 锋线相对低压中心的法向偏移，单位是低压核心半径的比例（WX-FRONT-01）。
+     * 冷锋在中心后侧（−n）、暖锋在前侧（+n），两者之间就是暖区。
+     */
+    public static final double FRONT_OFFSET_CORE_FRACTION = 0.45;
+
+    /**
+     * 冷锋的锋后降温（K，WX-FR-02）。真实冷锋过境 1 小时降 5–10 K；
+     * 这里取 4 K 是"成熟段强度 1.0"时的峰值，随 {@code intensity01} 线性缩放。
+     */
+    public static final double COLD_FRONT_COOLING_K = 4.0;
+    /** 冷锋的锋后加压（Pa，WX-FR-02）：典型 2–6 hPa，取 3 hPa。 */
+    public static final double COLD_FRONT_PRESSURE_RISE_PA = 300.0;
+    /** 暖锋的暖区升温（K，WX-FR-02）：暖锋平流本身比冷锋温和。 */
+    public static final double WARM_FRONT_WARMING_K = 2.5;
+    /** 暖锋的暖区降压（Pa，WX-FR-02）：暖平流 + 上升运动，取 −2 hPa。 */
+    public static final double WARM_FRONT_PRESSURE_DROP_PA = -200.0;
+
     public enum FrontType { COLD, WARM }
 
     public static final class Front {
@@ -43,6 +67,17 @@ public class FrontSystem implements WeatherPhenomenon {
             double t = ((x - x1) * dx + (z - z1) * dz) / len2;
             t = Math.max(0, Math.min(1, t));
             return Math.hypot(x - (x1 + dx * t), z - (z1 + dz * t));
+        }
+
+        /**
+         * 有符号距离（格）：沿 {@link #normal()} 为正 = 锋前，为负 = 锋后（WX-FR-02）。
+         *
+         * <p>热力/气压扰动不是对称的：冷锋只在锋后降温加压，暖锋只在暖区升温降压。
+         * 只靠 {@link #distanceTo} 的绝对值分不出前后，所以单独给一个有符号量。
+         */
+        public double signedDistanceTo(double x, double z) {
+            double[] n = normal();
+            return (x - x1) * n[0] + (z - z1) * n[1];
         }
 
         /** 法向量。约定：冷锋指暖区（锋前），暖锋指冷区——统一成"锋前"方向。 */
@@ -83,30 +118,53 @@ public class FrontSystem implements WeatherPhenomenon {
             spawnAccumulator -= 1.0;
             ServerPlayer anchor = pickAnchor(level);
             if (anchor == null) break;
-            double ang = random.nextDouble() * Math.PI * 2;
-            double dist = 500 + random.nextDouble() * 800;
-            double cx = anchor.getX() + Math.cos(ang) * dist;
-            double cz = anchor.getZ() + Math.sin(ang) * dist;
-            var l1s = ctx.l1().sample(cx, 120, cz);
+
+            // WX-FRONT-01：锋面必须挂在驱动器低压中心的槽线上。
+            // 旧实现是"玩家周围 500–1300 格随机圆环上的随机方向"，与 driver.cyclones、
+            // 与 L0/L1 的温度梯度毫无关系，于是同一时刻可以出现两条方向互斥的冷锋。
+            var low = ctx.driver().nearestLowPressureCenter(anchor.getX(), anchor.getZ());
+            if (low == null) break;   // 没有低压就没有锋面，宁可不生成
+
+            // 同一个低压不重复挂锋：两条锋的线中点相距 < 400 格就跳过
+            boolean taken = false;
+            for (Front existing : fronts) {
+                double mx = (existing.x1 + existing.x2) * 0.5;
+                double mz = (existing.z1 + existing.z2) * 0.5;
+                if (Math.hypot(mx - low.xBlocks(), mz - low.zBlocks()) < 400) { taken = true; break; }
+            }
+            if (taken) continue;
+
+            // 引导气流在低压中心上空 120 格 AGL 处取（锋线走向 = 垂直于它）
+            double guideY = ctx.terrain().heightAt(low.xBlocks(), low.zBlocks()) + 120.0;
+            var l1s = ctx.l1().sample(low.xBlocks(), guideY, low.zBlocks());
 
             Front f = newFront();
             f.type = random.nextDouble() < 0.55 ? FrontType.COLD : FrontType.WARM;
-            // 锋线走向：垂直于引导气流。旧公式把 atan2(x,z) 的"从 +Z 量起"
-            // 按"从 +X 量起"解释了，正东/正南风下线会平行于风。
-            // 线本身没有方向，这里取让 normal() 指向下风（移动方向）的那一侧。
+            // 锋线走向：槽线 ≈ 垂直于引导气流（切变线）。旧公式把 atan2(x,z) 的
+            // "从 +Z 量起"按"从 +X 量起"解释了，正东/正南风下线会平行于风。
             double wx = l1s.windX(), wz = l1s.windZ();
             double w = Math.hypot(wx, wz);
             if (w < 0.3) { wx = 1; wz = 0; w = 1; }  // 近静风：默认东风，方向才有定义
-            double ldx = wz / w, ldz = -wx / w;      // 线方向 ⟂ 风
-            double jit = (random.nextDouble() - 0.5) * 0.6;  // 锋线只是"大致"垂直，抖一下
-            double cj = Math.cos(jit), sj = Math.sin(jit);
+            double ldx = wz / w, ldz = -wx / w;      // 槽线方向 ⟂ 引导气流
+            // 冷暖锋分别向暖区/冷区倾：冷锋在低压后方（−n）朝暖区斜切，
+            // 暖锋在低压前方（+n）朝冷区斜切。南半球整体镜像（SYS-01 / DRV-08）。
+            double hemi = net.atomos.zenith.wind.HemisphereConvention.coriolisSign();
+            double skew = (f.type == FrontType.COLD ? +1 : -1) * COLD_WARM_SKEW_RADIANS * hemi;
+            double cj = Math.cos(skew), sj = Math.sin(skew);
             double lineDirX = ldx * cj - ldz * sj;
             double lineDirZ = ldx * sj + ldz * cj;
-            double halfLen = 250 + random.nextDouble() * 350;
-            f.x1 = cx - lineDirX * halfLen;
-            f.z1 = cz - lineDirZ * halfLen;
-            f.x2 = cx + lineDirX * halfLen;
-            f.z2 = cz + lineDirZ * halfLen;
+            // 沿法线的偏移：冷锋退到低压后侧、暖锋推到前侧，两者夹出暖区
+            double offset = (f.type == FrontType.COLD ? -1 : +1)
+                    * low.coreRadiusBlocks() * FRONT_OFFSET_CORE_FRACTION;
+            double nx = -lineDirZ, nz = lineDirX;  // 倾斜后锋线的法线（≈引导气流方向）
+            double fx = low.xBlocks() + nx * offset;
+            double fz = low.zBlocks() + nz * offset;
+
+            double halfLen = Math.max(250, Math.min(600, low.outerRadiusBlocks() * 0.10));
+            f.x1 = fx - lineDirX * halfLen;
+            f.z1 = fz - lineDirZ * halfLen;
+            f.x2 = fx + lineDirX * halfLen;
+            f.z2 = fz + lineDirZ * halfLen;
             double steer = Math.hypot(l1s.windX(), l1s.windZ());
             double[] n = f.normal();
             // 冷暖锋都跟着引导气流顺风走，暖锋只是慢半拍
@@ -150,20 +208,37 @@ public class FrontSystem implements WeatherPhenomenon {
             double band = Math.exp(-(d * d) / (width * width));
             double e = band * f.intensity01;
             double[] n = f.normal();
+            // 有符号距离：正 = 锋前（暖区侧），负 = 锋后（冷区侧）
+            double sd = f.signedDistanceTo(x, z);
             if (f.type == FrontType.COLD) {
                 // 冷锋：窄降水带 + 阵风；锋后风向顺转用沿法线的推力近似一下
                 double gust = 6.0 * e;
+                // 锋后降温加压（WX-FR-02）：只用 sd < 0 的那一半，锋前不受影响。
+                // 用 smoothstep 而不是阶跃，锋线两侧才没有 4 K 的突变。
+                double behind = smoothstep(0.0, -width, sd);
                 acc = acc.add(new WindContribution(
                         n[0] * gust * 0.6, 0.8 * e, n[1] * gust * 0.6,
-                        0.3 * e, 0.75 * e));
+                        0.3 * e, 0.75 * e,
+                        -COLD_FRONT_COOLING_K * e * behind,
+                        +COLD_FRONT_PRESSURE_RISE_PA * e * behind));
             } else {
                 // 暖锋：宽层状降水带，风很弱
+                double ahead = smoothstep(0.0, width, sd);
                 acc = acc.add(new WindContribution(
                         -n[0] * 1.5 * e, 0.3 * e, -n[1] * 1.5 * e,
-                        0.12 * e, 0.5 * e));
+                        0.12 * e, 0.5 * e,
+                        +WARM_FRONT_WARMING_K * e * ahead,
+                        +WARM_FRONT_PRESSURE_DROP_PA * e * ahead));
             }
         }
         return acc;
+    }
+
+    /** {@code x} 从 {@code e0} 走到 {@code e1} 时 0→1 的平滑过渡；{@code e1 < e0} 时方向反转。 */
+    private static double smoothstep(double e0, double e1, double x) {
+        double t = (x - e0) / (e1 - e0);
+        t = t < 0 ? 0 : Math.min(1, t);
+        return t * t * (3 - 2 * t);
     }
 
     @Override

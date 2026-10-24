@@ -239,6 +239,45 @@ public class WorldScaleDriver {
                 c.radius, c.intensity);
     }
 
+    /**
+     * 低压中心视图（WX-FRONT-01）：锋面必须挂在低压的槽线上，不能凭空出现在
+     * 玩家周围 500–1300 格的随机圆环上。
+     *
+     * @param xBlocks 观察点（一般是玩家）的方块 x
+     * @param zBlocks 观察点方块 z
+     * @return 环面上离观察点最近的**低压**气旋中心（已搬到观察点附近），
+     *         没有低压气旋时返回 {@code null}
+     */
+    public record LowPressureCenter(double xBlocks, double zBlocks, double intensity01,
+                                    double coreRadiusBlocks, double outerRadiusBlocks) {}
+
+    /**
+     * 最近的低压中心（环面最近镜像）。
+     *
+     * <p>驱动器内部用格坐标 {@code [0, GRID_CELLS)}，直接乘 256 得到方块坐标会离玩家
+     * 十万八千里；这里用 {@link #wrapDelta} 把中心搬到观察点所在的镜像周期里，
+     * 返回的坐标可以直接拿去建锋线。
+     *
+     * <p>排序用 {@code 距离 / (0.5 + 强度)}：强的低压对锋面生成的"吸引力"更大，
+     * 但不至于让 4 万格外的强低压盖过 2 千格外的弱低压。
+     */
+    public LowPressureCenter nearestLowPressureCenter(double xBlocks, double zBlocks) {
+        LowPressureCenter best = null;
+        double bestScore = Double.MAX_VALUE;
+        for (CycloneCell c : cyclones) {
+            if (!c.lowPressure) continue;
+            double dx = wrapDelta(c.x - xBlocks / CELL_SIZE_BLOCKS, GRID_CELLS) * CELL_SIZE_BLOCKS;
+            double dz = wrapDelta(c.z - zBlocks / CELL_SIZE_BLOCKS, GRID_CELLS) * CELL_SIZE_BLOCKS;
+            double score = Math.hypot(dx, dz) / (0.5 + clamp01(c.intensity));
+            if (score < bestScore) {
+                bestScore = score;
+                best = new LowPressureCenter(xBlocks + dx, zBlocks + dz, c.intensity,
+                        c.coreRadius, c.outerRadius);
+            }
+        }
+        return best;
+    }
+
     // sample
 
     public Sample sample(int cellX, int cellZ) {
