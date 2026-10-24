@@ -27,6 +27,8 @@ public final class GameplayWindSample {
     public ZenithVec3 meanVelocityVector() { return inner.meanVelocityVector(); }
     public ZenithVec3 gustVelocityVector() { return inner.gustVelocityVector(); }
     public ZenithVec3 effectiveVelocityVector() { return inner.effectiveVelocityVector(); }
+    /** 管道/接力用：平均 + 本地修正，不含阵风（BLK-07）。 */
+    public ZenithVec3 pipelineVelocityVector() { return inner.pipelineVelocityVector(); }
     public float meanSpeedMetersPerSecond() { return inner.speedMetersPerSecond(); }
     public float horizontalMeanSpeedMetersPerSecond() { return inner.horizontalSpeedMetersPerSecond(); }
     public float effectiveSpeedMetersPerSecond() { return inner.effectiveSpeedMetersPerSecond(); }

@@ -1,12 +1,12 @@
 package net.atomos.zenith.weather;
 
+import net.minecraft.nbt.CompoundTag;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
-import java.util.Random;
 
 /**
  * 风暴单体：积雨云的一生——发展、成熟、消散。
@@ -53,8 +53,16 @@ public class StormCellSystem implements WeatherPhenomenon {
     }
 
     private final List<StormCell> cells = new ArrayList<>();
-    private final Random random = new Random();
+    private final ZenithRandom random;
     private double spawnAccumulator = 0;
+
+    public StormCellSystem() {
+        this(0L);
+    }
+
+    public StormCellSystem(long seed) {
+        this.random = new ZenithRandom(seed);
+    }
 
     @Override
     public void tick(ServerLevel level, double dtSeconds, WeatherContext ctx) {
@@ -280,6 +288,53 @@ public class StormCellSystem implements WeatherPhenomenon {
         c.radiusBlocks = 100;
         c.ageSeconds = DEVELOP_SECONDS; // 直接进入成熟期
         cells.add(c);
+    }
+
+    // 存档（SYS-08）
+
+    @Override
+    public String saveKey() { return "storm_cells"; }
+
+    @Override
+    public CompoundTag save() {
+        CompoundTag tag = new CompoundTag();
+        tag.putLong("rng", random.state());
+        tag.putDouble("spawnAccumulator", spawnAccumulator);
+        tag.put("list", WeatherNbt.writeList(cells, c -> {
+            CompoundTag t = new CompoundTag();
+            t.putDouble("x", c.x);
+            t.putDouble("z", c.z);
+            t.putDouble("radius", c.radiusBlocks);
+            t.putDouble("age", c.ageSeconds);
+            t.putDouble("moveX", c.moveX);
+            t.putDouble("moveZ", c.moveZ);
+            t.putDouble("lightningTimer", c.lightningTimer);
+            t.putDouble("hail", c.hail01);
+            t.putDouble("groundY", c.groundY);
+            return t;
+        }));
+        return tag;
+    }
+
+    @Override
+    public void load(CompoundTag tag) {
+        if (tag.contains("rng")) random.setState(tag.getLong("rng"));
+        spawnAccumulator = tag.getDouble("spawnAccumulator");
+        cells.clear();
+        cells.addAll(WeatherNbt.readList(tag, "list", t -> {
+            StormCell c = new StormCell();
+            c.x = t.getDouble("x");
+            c.z = t.getDouble("z");
+            c.radiusBlocks = Math.max(1.0, t.getDouble("radius"));
+            c.ageSeconds = t.getDouble("age");
+            c.moveX = t.getDouble("moveX");
+            c.moveZ = t.getDouble("moveZ");
+            c.lightningTimer = t.getDouble("lightningTimer");
+            c.hail01 = t.getDouble("hail");
+            c.groundY = t.getDouble("groundY");
+            return c;
+        }));
+        while (cells.size() > MAX_CELLS) cells.remove(cells.size() - 1);
     }
 
     private static double clamp01(double v) { return v < 0 ? 0 : Math.min(v, 1); }

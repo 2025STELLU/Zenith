@@ -31,6 +31,7 @@ import net.atomos.zenith.weather.SeaBreezeSystem;
 import net.atomos.zenith.weather.SquallLineSystem;
 import net.atomos.zenith.weather.StormCellSystem;
 import net.atomos.zenith.weather.ThermalSystem;
+import net.atomos.zenith.weather.TornadoSystem;
 import net.atomos.zenith.weather.TyphoonSystem;
 import net.atomos.zenith.weather.WeatherContext;
 import net.atomos.zenith.weather.WeatherPhenomenon;
@@ -57,6 +58,7 @@ import net.minecraft.world.level.material.Fluids;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.server.ServerStoppedEvent;
+import net.neoforged.neoforge.event.server.ServerStoppingEvent;
 import net.neoforged.neoforge.event.tick.ServerTickEvent;
 import net.neoforged.neoforge.network.PacketDistributor;
 import org.slf4j.Logger;
@@ -122,6 +124,7 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
         final FrontSystem fronts;
         final DustDevilSystem dustDevils;
         final SquallLineSystem squallLines;
+        final TornadoSystem tornadoes;
         final MountainWaveSystem mountainWaves;
         final MonsoonSystem monsoon;
         final HashedSeedTerrainProvider hashedTerrain;
@@ -132,26 +135,42 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
         final List<LocalFlowSolver.HeatSource> heatCache = new ArrayList<>();
         long heatCacheTick = -1;
         double focusX, focusZ;
+        /** 存档状态是否已装回来（SYS-08）。 */
+        boolean restored;
 
-        DimensionState(long seed) {
-            this.driver = new WorldScaleDriver(seed);
+        DimensionState(long seed, int dimensionSalt) {
+            // 每个现象一个独立随机流：同维度内不同现象互不干扰，跨维度也不同（SYS-08）
+            long base = seed ^ ((long) dimensionSalt * 0x9E3779B97F4A7C15L);
+            this.driver = new WorldScaleDriver(base);
             this.l0 = new BackgroundMetGrid();
-            this.l1 = new MesoscaleGrid(seed ^ 0x51ab);
-            this.thermals = new ThermalSystem();
+            this.l1 = new MesoscaleGrid(base ^ 0x51ab);
+            this.thermals = new ThermalSystem(base ^ 0x74686572L);      // "ther"
             this.seaBreeze = new SeaBreezeSystem();
-            this.storms = new StormCellSystem();
-            this.typhoons = new TyphoonSystem();
-            this.fronts = new FrontSystem();
-            this.dustDevils = new DustDevilSystem();
-            this.squallLines = new SquallLineSystem();
+            this.storms = new StormCellSystem(base ^ 0x73746f72L);      // "stor"
+            this.typhoons = new TyphoonSystem(base ^ 0x74797068L);      // "typh"
+            this.fronts = new FrontSystem(base ^ 0x66726f6eL);          // "fron"
+            this.dustDevils = new DustDevilSystem(base ^ 0x64757374L);  // "dust"
+            this.squallLines = new SquallLineSystem(base ^ 0x73717561L); // "squa"
+            this.tornadoes = new TornadoSystem(base ^ 0x746f726eL);     // "torn"
             this.mountainWaves = new MountainWaveSystem();
             this.monsoon = new MonsoonSystem();
             this.hashedTerrain = new HashedSeedTerrainProvider(seed);
         }
 
+        /**
+         * 会逐点采样、需要每帧参与 {@code sample()} 的现象。
+         *
+         * <p>季风不在里面（WX-MS-01）：它已经是 L0 的**基础流偏置**
+         * （{@link WorldScaleDriver#setBaseFlowBias}），再当现象叠一次就等于加两遍。
+         */
         List<WeatherPhenomenon> phenomena() {
             return List.of(thermals, seaBreeze, storms, typhoons, fronts, dustDevils, squallLines,
-                    mountainWaves, monsoon);
+                    tornadoes, mountainWaves);
+        }
+
+        /** 存档用的现象（季风和背风波无状态）。 */
+        List<WeatherPhenomenon> persistentPhenomena() {
+            return List.of(fronts, thermals, dustDevils, storms, typhoons, squallLines, tornadoes);
         }
     }
 
@@ -159,7 +178,8 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
 
     private DimensionState stateFor(ServerLevel level) {
         return dimensions.computeIfAbsent(level.dimension(), k -> {
-            DimensionState s = new DimensionState(level.getSeed());
+            // 维度盐：同一个世界种子在不同维度拿到不同的现象序列（SYS-08）
+            DimensionState s = new DimensionState(level.getSeed(), level.dimension().location().hashCode());
             s.terrainAdapter = new McTerrainAdapter(level, s.hashedTerrain);
             s.l2 = new LocalFlowSolver(
                     (x, y, z) -> {
@@ -178,11 +198,43 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
                                 x & 15, z & 15);
                         return Math.max(h - 1, ca.getMinBuildHeight());
                     });
+            // 存档恢复（SYS-08）：只装一次，之后 tick 里才允许写盘
+            ZenithWeatherSavedData data = ZenithWeatherSavedData.get(level);
+            if (data.hasPayload()) {
+                data.applyTo(s.driver, s.persistentPhenomena());
+            }
+            s.restored = true;
             return s;
         });
     }
 
     // tick 编排
+
+    /**
+     * 关服前最后一次落盘（SYS-08）。
+     *
+     * <p><b>必须挂 {@code ServerStoppingEvent}，不能挂 {@code ServerStoppedEvent}</b>：
+     * {@code MinecraftServer#runServer} 的顺序是
+     * {@code handleServerStopping} → {@code stopServer()} → {@code handleServerStopped}，而
+     * {@code stopServer()} 里才调 {@code saveAllChunks()}（内部走
+     * {@code DimensionDataStorage.save()}，只写 {@code isDirty()} 的数据）。把最后一次
+     * {@code capture()} 放在 {@code Stopped} 里，标脏发生在存盘之后，那一份永远写不出去——
+     * 停机前最后一分钟（{@link #SAVE_INTERVAL_TICKS} 周期内）的天气就白改了。
+     *
+     * <p>这里的顺序是 显式落盘 → 标脏，然后原版 saveAllChunks 再写一遍（第二次是空写，
+     * 因为 dirty 已被 {@code SavedData.save} 清掉），所以不会写两次磁盘。
+     */
+    @SubscribeEvent
+    public void onServerStopping(ServerStoppingEvent event) {
+        try {
+            for (ServerLevel level : event.getServer().getAllLevels()) {
+                DimensionState s = dimensions.get(level.dimension());
+                if (s != null) persist(level, s);
+            }
+        } catch (RuntimeException e) {
+            LOGGER.warn("Failed to flush weather state on shutdown", e);
+        }
+    }
 
     /**
      * 存档关闭：维度状态里 pin 着旧 ServerLevel（地形适配器、L2 lambda 都引着它），
@@ -233,9 +285,19 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
             WeatherContext ctx = new WeatherContext(level, s.driver, s.l0, s.l1,
                     s.terrainAdapter, tick, timeOfDay, raining, thundering,
                     SeasonSystem.compute(level.getDayTime()));
+            // 季风（WX-MS-01）：不是逐点现象，而是 L0 的基础流偏置。先 tick 出年循环相位
+            // 和 33×33 偏置场，再把偏置挂到驱动器上，L0 刷新时自然吃到。
+            if (net.atomos.zenith.ZenithConfig.enableMonsoon()) {
+                s.monsoon.tick(level, dt, ctx);
+                s.driver.setBaseFlowBias(s.monsoon::biasAt);
+            } else {
+                s.driver.setBaseFlowBias(null);
+            }
             for (WeatherPhenomenon p : s.phenomena()) {
                 if (phenomenonEnabled(p)) p.tick(level, dt, ctx);
             }
+        } else {
+            s.driver.setBaseFlowBias(null);
         }
 
         // 3) L0 刷新
@@ -264,6 +326,29 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
         if (tick % Math.max(1, net.atomos.zenith.ZenithConfig.weatherSnapshotTicks()) == 0) {
             broadcastWeatherSnapshot(level, s);
         }
+
+        // 7) 存档（SYS-08）：状态一直在变，按数据包自动存的节奏标脏就够（每分钟一次），
+        //    不必每 tick 序列化一遍。真正关服时 onServerStopped 里再强制写一次。
+        if (tick % SAVE_INTERVAL_TICKS == 0) {
+            persist(level, s);
+        }
+    }
+
+    /** 天气状态的写盘周期（tick）。1 分钟。 */
+    public static final int SAVE_INTERVAL_TICKS = 1200;
+
+    /**
+     * 把该维度的驱动器 + 现象状态写进 {@link ZenithWeatherSavedData}。
+     *
+     * <p>只有"已经恢复过"的维度才写：{@code stateFor} 建状态时会同步装存档，
+     * 所以正常情况下 {@code restored} 一定是 {@code true}；这个判断只是防止
+     * 有人绕过 {@code stateFor} 直接 new 一个状态把新世界覆盖成空。
+     */
+    private static void persist(ServerLevel level, DimensionState s) {
+        if (!s.restored) return;
+        ZenithWeatherSavedData data = ZenithWeatherSavedData.get(level);
+        data.capture(s.driver, s.persistentPhenomena());
+        data.setDirty();
     }
 
     /**
@@ -286,7 +371,7 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
         if (p instanceof TyphoonSystem) return net.atomos.zenith.ZenithConfig.enableTyphoon();
         if (p instanceof SquallLineSystem) return net.atomos.zenith.ZenithConfig.enableSquallLine();
         if (p instanceof DustDevilSystem) return net.atomos.zenith.ZenithConfig.enableDustDevil();
-        if (p instanceof MonsoonSystem) return net.atomos.zenith.ZenithConfig.enableMonsoon();
+        if (p instanceof TornadoSystem) return net.atomos.zenith.ZenithConfig.enableTornado();
         return true;
     }
 
@@ -535,12 +620,12 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
         // 湿度就取焦点处的 L1 采样
         var l1sample = s.l1.sample(s.focusX, 80, s.focusZ);
         WeatherSnapshotPacket pkt = WeatherSnapshotPacket.build(
-                s.driver.stormActivity(), s.driver.activeTornadoCount(),
+                s.driver.stormActivity(), s.tornadoes.activeCount(),
                 s.thermals.activeCount(), s.seaBreeze.frontInlandDistance(),
                 l1sample.humidity01(),
                 typhoons, storms,
                 s.fronts.fronts(), s.dustDevils.devils(), s.squallLines.lines(),
-                s.driver.tornadoes());
+                s.tornadoes.tornadoes());
         for (ServerPlayer player : level.players()) {
             PacketDistributor.sendToPlayer(player, pkt);
         }

@@ -11,7 +11,14 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 
-/** 风道方块实体：采样本地风，沿朝向接力。 */
+/**
+ * 风道方块实体：采样本地气流，沿朝向接力。
+ *
+ * <p>用 {@link GameplayWindSample#pipelineVelocityVector()}（平均风 + 本地修正）而不是
+ * {@code meanVelocityVector()}：风扇的射流只存在于 {@code localModifier} 里，用平均风的话
+ * 风道永远读不到风扇（BLK-07）。这里也刻意**不含阵风**——阵风是每 tick 抖的噪声，
+ * 拿它驱动风道会让下游射流强度跟着抖。
+ */
 public class DuctBlockEntity extends BlockEntity {
     private int tickCounter = 0;
 
@@ -33,7 +40,7 @@ public class DuctBlockEntity extends BlockEntity {
             JetSourceRegistry.unregisterAt(serverLevel.dimension(), ox, oy, oz);
             return;
         }
-        ZenithVec3 v = wind.meanVelocityVector();
+        ZenithVec3 v = wind.pipelineVelocityVector();
         double speed = v.length();
         if (speed < 0.8) {
             JetSourceRegistry.unregisterAt(serverLevel.dimension(), ox, oy, oz);

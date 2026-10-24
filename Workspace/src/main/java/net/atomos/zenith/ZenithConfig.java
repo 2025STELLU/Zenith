@@ -45,6 +45,7 @@ public final class ZenithConfig {
         public final ModConfigSpec.BooleanValue enableMonsoon;
         public final ModConfigSpec.BooleanValue enableThermal;
         public final ModConfigSpec.BooleanValue enableSeaBreeze;
+        public final ModConfigSpec.BooleanValue enableTornado;
 
         public final ModConfigSpec.BooleanValue weatherInNether;
         public final ModConfigSpec.BooleanValue weatherInEnd;
@@ -82,6 +83,7 @@ public final class ZenithConfig {
             enableMonsoon = b.comment("启用季风调制。").define("enableMonsoon", true);
             enableThermal = b.comment("生成热泡。").define("enableThermal", true);
             enableSeaBreeze = b.comment("启用海陆风。").define("enableSeaBreeze", true);
+            enableTornado = b.comment("生成龙卷。").define("enableTornado", true);
             b.pop();
 
             b.comment("维度门控").push("dimensions");
@@ -163,6 +165,7 @@ public final class ZenithConfig {
     public static boolean enableMonsoon() { return safe(() -> SERVER.enableMonsoon.get(), true); }
     public static boolean enableThermal() { return safe(() -> SERVER.enableThermal.get(), true); }
     public static boolean enableSeaBreeze() { return safe(() -> SERVER.enableSeaBreeze.get(), true); }
+    public static boolean enableTornado() { return safe(() -> SERVER.enableTornado.get(), true); }
 
     public static boolean weatherInNether() { return safe(() -> SERVER.weatherInNether.get(), false); }
     public static boolean weatherInEnd() { return safe(() -> SERVER.weatherInEnd.get(), false); }

@@ -181,6 +181,9 @@ public class LocalFlowSolver {
             double across2 = (px * px + py * py + pz * pz) - along * along;
             double radius = jet.radiusBlocks() * (1 + along * 0.06);
             if (across2 > radius * radius) continue;
+            // 遮挡：射流撞到实心方块就停，不能穿墙吹到隔壁房间（BLK-07）。
+            // 只对真正落在射流半径内的采样点做步进，所以平地/室外的额外开销≈0。
+            if (isJetBlocked(jet, x, y, z)) continue;
             double core = Math.exp(-across2 / (radius * radius * 0.5));
             double decay = 1.0 / (1.0 + along / (jet.lengthBlocks() * 0.5));
             double s = jet.speedMps() * core * decay;
@@ -193,6 +196,30 @@ public class LocalFlowSolver {
     }
 
     private static double sqr(double v) { return v * v; }
+
+    /**
+     * 采样点是否被射流路径上的实心方块挡在身后。
+     *
+     * <p>只沿轴走到采样点的投影距离 {@code along}，不检查采样点之后的方块：
+     * 否则"吹到墙前 1 格"这种合法位置会被身后的墙误判成被挡。
+     */
+    private boolean isJetBlocked(Jet jet, double x, double y, double z) {
+        double along = (x - jet.x()) * jet.dirX() + (y - jet.y()) * jet.dirY()
+                + (z - jet.z()) * jet.dirZ();
+        if (along <= 0) return false;
+        final double step = 0.5;
+        double limit = Math.min(along, JET_MAX_RAY_BLOCKS);
+        for (double d = step; d < limit; d += step) {
+            int bx = (int) Math.floor(jet.x() + jet.dirX() * d);
+            int by = (int) Math.floor(jet.y() + jet.dirY() * d);
+            int bz = (int) Math.floor(jet.z() + jet.dirZ() * d);
+            if (obstacles.isSolid(bx, by, bz)) return true;
+        }
+        return false;
+    }
+
+    /** 射流遮挡射线的最长检查距离（格）：再远也就衰减没了，不必逐格查。 */
+    public static final double JET_MAX_RAY_BLOCKS = 40.0;
 
     /** 平滑窗：0..1 之间用 3t²−2t³。 */
     private static double smoothstep(double t) {

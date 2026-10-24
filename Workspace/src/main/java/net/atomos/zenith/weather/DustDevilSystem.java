@@ -2,13 +2,13 @@ package net.atomos.zenith.weather;
 
 import net.atomos.zenith.api.ZenithTerrainSurfaceClass;
 import net.atomos.zenith.wind.HemisphereConvention;
+import net.minecraft.nbt.CompoundTag;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
-import java.util.Random;
 
 /**
  * 尘卷风：晴天热出来的地面小涡旋。
@@ -62,8 +62,16 @@ public class DustDevilSystem implements WeatherPhenomenon {
     }
 
     private final List<DustDevil> devils = new ArrayList<>();
-    private final Random random = new Random();
+    private final ZenithRandom random;
     private double spawnAccumulator = 0;
+
+    public DustDevilSystem() {
+        this(0L);
+    }
+
+    public DustDevilSystem(long seed) {
+        this.random = new ZenithRandom(seed);
+    }
 
     @Override
     public void tick(ServerLevel level, double dtSeconds, WeatherContext ctx) {
@@ -169,4 +177,55 @@ public class DustDevilSystem implements WeatherPhenomenon {
     public int activeCount() { return devils.size(); }
 
     public List<DustDevil> devils() { return List.copyOf(devils); }
+
+    // 存档（SYS-08）
+
+    @Override
+    public String saveKey() { return "dust_devils"; }
+
+    @Override
+    public CompoundTag save() {
+        CompoundTag tag = new CompoundTag();
+        tag.putLong("rng", random.state());
+        tag.putDouble("spawnAccumulator", spawnAccumulator);
+        tag.put("list", WeatherNbt.writeList(devils, d -> {
+            CompoundTag c = new CompoundTag();
+            c.putDouble("x", d.x);
+            c.putDouble("z", d.z);
+            c.putDouble("radius", d.radiusBlocks);
+            c.putDouble("height", d.heightBlocks);
+            c.putDouble("tangential", d.tangentialMps);
+            c.putDouble("age", d.ageSeconds);
+            c.putDouble("lifetime", d.lifetimeSeconds);
+            c.putDouble("spin", d.spin);
+            c.putDouble("wanderX", d.wanderX);
+            c.putDouble("wanderZ", d.wanderZ);
+            c.putDouble("groundY", d.groundY);
+            return c;
+        }));
+        return tag;
+    }
+
+    @Override
+    public void load(CompoundTag tag) {
+        if (tag.contains("rng")) random.setState(tag.getLong("rng"));
+        spawnAccumulator = tag.getDouble("spawnAccumulator");
+        devils.clear();
+        devils.addAll(WeatherNbt.readList(tag, "list", c -> {
+            DustDevil d = new DustDevil();
+            d.x = c.getDouble("x");
+            d.z = c.getDouble("z");
+            d.radiusBlocks = Math.max(0.5, c.getDouble("radius"));
+            d.heightBlocks = c.getDouble("height");
+            d.tangentialMps = c.getDouble("tangential");
+            d.ageSeconds = c.getDouble("age");
+            d.lifetimeSeconds = Math.max(1.0, c.getDouble("lifetime"));
+            d.spin = c.getDouble("spin") >= 0 ? 1 : -1;
+            d.wanderX = c.getDouble("wanderX");
+            d.wanderZ = c.getDouble("wanderZ");
+            d.groundY = c.getDouble("groundY");
+            return d;
+        }));
+        while (devils.size() > MAX_DEVILS) devils.remove(devils.size() - 1);
+    }
 }

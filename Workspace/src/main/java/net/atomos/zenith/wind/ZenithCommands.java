@@ -52,7 +52,7 @@ public final class ZenithCommands {
                     src.sendSuccess(() -> Component.translatable("zenith.command.status",
                             level.dimension().location().toString(),
                             f(state.driver.stormActivity(), 2),
-                            String.valueOf(state.driver.activeTornadoCount()),
+                            String.valueOf(state.tornadoes.activeCount()),
                             String.valueOf(state.thermals.activeCount()),
                             String.valueOf(state.storms.activeCount()),
                             String.valueOf(state.typhoons.activeCount()),

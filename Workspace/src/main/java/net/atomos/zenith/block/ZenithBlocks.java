@@ -41,7 +41,9 @@ public final class ZenithBlocks {
                 .requiresCorrectToolForDrops();
     }
 
-    static BlockBehaviour.Properties fanProps() { return metalProps().lightLevel(s -> 0); }
+    // lightLevel 默认就是 0；显式写 .lightLevel(s -> 0) 是空操作，只会让人误以为"风扇本来会发光、
+    // 这里把它关掉了"（BLK-08）。要发光直接删掉这一行即可。
+    static BlockBehaviour.Properties fanProps() { return metalProps(); }
     static BlockBehaviour.Properties ductProps() { return metalProps(); }
     static BlockBehaviour.Properties vaneProps() {
         return BlockBehaviour.Properties.of().strength(1.5f, 2.0f).noOcclusion();

@@ -1,12 +1,12 @@
 package net.atomos.zenith.weather;
 
+import net.minecraft.nbt.CompoundTag;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
-import java.util.Random;
 
 /**
  * 飑线：一条移动的线状强对流，附带下击暴流。
@@ -97,8 +97,16 @@ public class SquallLineSystem implements WeatherPhenomenon {
     }
 
     private final List<SquallLine> lines = new ArrayList<>();
-    private final Random random = new Random();
+    private final ZenithRandom random;
     private double spawnAccumulator = 0;
+
+    public SquallLineSystem() {
+        this(0L);
+    }
+
+    public SquallLineSystem(long seed) {
+        this.random = new ZenithRandom(seed);
+    }
 
     @Override
     public void tick(ServerLevel level, double dtSeconds, WeatherContext ctx) {
@@ -297,4 +305,80 @@ public class SquallLineSystem implements WeatherPhenomenon {
     public int activeCount() { return lines.size(); }
 
     public List<SquallLine> lines() { return List.copyOf(lines); }
+
+    // 存档（SYS-08）
+
+    @Override
+    public String saveKey() { return "squall_lines"; }
+
+    @Override
+    public CompoundTag save() {
+        CompoundTag tag = new CompoundTag();
+        tag.putLong("rng", random.state());
+        tag.putDouble("spawnAccumulator", spawnAccumulator);
+        tag.put("list", WeatherNbt.writeList(lines, l -> {
+            CompoundTag c = new CompoundTag();
+            c.putDouble("x1", l.x1);
+            c.putDouble("z1", l.z1);
+            c.putDouble("x2", l.x2);
+            c.putDouble("z2", l.z2);
+            c.putDouble("moveX", l.moveX);
+            c.putDouble("moveZ", l.moveZ);
+            c.putDouble("age", l.ageSeconds);
+            c.putDouble("lifetime", l.lifetimeSeconds);
+            c.putDouble("intensity", l.intensity01);
+            c.putDouble("lightningTimer", l.lightningTimer);
+            c.putDouble("groundY", l.groundY);
+            c.put("microbursts", WeatherNbt.writeList(l.microbursts, mb -> {
+                CompoundTag m = new CompoundTag();
+                m.putDouble("x", mb.x);
+                m.putDouble("z", mb.z);
+                m.putDouble("age", mb.ageSeconds);
+                m.putDouble("lifetime", mb.lifetimeSeconds);
+                m.putDouble("radius", mb.radiusBlocks);
+                m.putDouble("groundY", mb.groundY);
+                m.putDouble("strength", mb.strength01);
+                return m;
+            }));
+            return c;
+        }));
+        return tag;
+    }
+
+    @Override
+    public void load(CompoundTag tag) {
+        if (tag.contains("rng")) random.setState(tag.getLong("rng"));
+        spawnAccumulator = tag.getDouble("spawnAccumulator");
+        lines.clear();
+        lines.addAll(WeatherNbt.readList(tag, "list", c -> {
+            SquallLine l = new SquallLine();
+            l.x1 = c.getDouble("x1");
+            l.z1 = c.getDouble("z1");
+            l.x2 = c.getDouble("x2");
+            l.z2 = c.getDouble("z2");
+            l.moveX = c.getDouble("moveX");
+            l.moveZ = c.getDouble("moveZ");
+            l.ageSeconds = c.getDouble("age");
+            l.lifetimeSeconds = Math.max(1.0, c.getDouble("lifetime"));
+            l.intensity01 = c.getDouble("intensity");
+            l.lightningTimer = c.getDouble("lightningTimer");
+            l.groundY = c.getDouble("groundY");
+            l.microbursts.addAll(WeatherNbt.readList(c, "microbursts", m -> {
+                Microburst mb = new Microburst();
+                mb.x = m.getDouble("x");
+                mb.z = m.getDouble("z");
+                mb.ageSeconds = m.getDouble("age");
+                mb.lifetimeSeconds = Math.max(1.0, m.getDouble("lifetime"));
+                mb.radiusBlocks = Math.max(1.0, m.getDouble("radius"));
+                mb.groundY = m.getDouble("groundY");
+                mb.strength01 = m.getDouble("strength");
+                return mb;
+            }));
+            while (l.microbursts.size() > MAX_MICROBURSTS_PER_LINE) {
+                l.microbursts.remove(l.microbursts.size() - 1);
+            }
+            return l;
+        }));
+        while (lines.size() > MAX_LINES) lines.remove(lines.size() - 1);
+    }
 }

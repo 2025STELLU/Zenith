@@ -2,13 +2,13 @@ package net.atomos.zenith.weather;
 
 import net.atomos.zenith.api.ZenithTerrainSurfaceClass;
 import net.atomos.zenith.wind.MesoscaleGrid;
+import net.minecraft.nbt.CompoundTag;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
-import java.util.Random;
 
 /**
  * 热对流：太阳晒热地面，热泡往上冒。
@@ -132,8 +132,16 @@ public class ThermalSystem implements WeatherPhenomenon {
     }
 
     private final List<Thermal> thermals = new ArrayList<>();
-    private final Random random = new Random();
+    private final ZenithRandom random;
     private double spawnAccumulator = 0;
+
+    public ThermalSystem() {
+        this(0L);
+    }
+
+    public ThermalSystem(long seed) {
+        this.random = new ZenithRandom(seed);
+    }
 
     @Override
     public void tick(ServerLevel level, double dtSeconds, WeatherContext ctx) {
@@ -253,5 +261,55 @@ public class ThermalSystem implements WeatherPhenomenon {
         t.spawnSolar = 1.0;
         t.solarFactor = 1.0;
         thermals.add(t);
+    }
+
+    // 存档（SYS-08）
+
+    @Override
+    public String saveKey() { return "thermals"; }
+
+    @Override
+    public CompoundTag save() {
+        CompoundTag tag = new CompoundTag();
+        tag.putLong("rng", random.state());
+        tag.putDouble("spawnAccumulator", spawnAccumulator);
+        tag.put("list", WeatherNbt.writeList(thermals, t -> {
+            CompoundTag c = new CompoundTag();
+            c.putDouble("x", t.x);
+            c.putDouble("z", t.z);
+            c.putDouble("radius", t.radiusBlocks);
+            c.putDouble("updraft", t.updraftMps);
+            c.putDouble("age", t.ageSeconds);
+            c.putDouble("lifetime", t.lifetimeSeconds);
+            c.putDouble("heightAgl", t.heightAgl);
+            c.putDouble("groundY", t.groundY);
+            c.putDouble("spawnSolar", t.spawnSolar);
+            c.putDouble("solar", t.solarFactor);
+            return c;
+        }));
+        return tag;
+    }
+
+    @Override
+    public void load(CompoundTag tag) {
+        if (tag.contains("rng")) random.setState(tag.getLong("rng"));
+        spawnAccumulator = tag.getDouble("spawnAccumulator");
+        thermals.clear();
+        thermals.addAll(WeatherNbt.readList(tag, "list", c -> {
+            Thermal t = new Thermal();
+            t.x = c.getDouble("x");
+            t.z = c.getDouble("z");
+            t.radiusBlocks = c.getDouble("radius");
+            t.updraftMps = c.getDouble("updraft");
+            t.ageSeconds = c.getDouble("age");
+            t.lifetimeSeconds = Math.max(1.0, c.getDouble("lifetime"));
+            t.heightAgl = c.getDouble("heightAgl");
+            t.groundY = c.getDouble("groundY");
+            t.spawnSolar = Math.max(0.1, c.getDouble("spawnSolar"));
+            t.solarFactor = c.getDouble("solar");
+            t.topY = t.groundY + t.heightAgl;
+            return t;
+        }));
+        while (thermals.size() > MAX_THERMALS) thermals.remove(thermals.size() - 1);
     }
 }

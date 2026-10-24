@@ -57,6 +57,16 @@ public final class ZenithWindSample {
     public ZenithVec3 effectiveVelocityVector() {
         return meanVelocity.add(gustVelocity).add(localModifier);
     }
+
+    /**
+     * 管道/接力用的风速 = 平均 + 本地修正，**不含阵风**（BLK-07）。
+     *
+     * <p>风扇/风道要判断"上游有没有风在推我"：阵风是随机涨落，让风道按阵风开关会每秒
+     * 抖动一次；而本地修正里含上游射流，才是真正该接力的东西。
+     */
+    public ZenithVec3 pipelineVelocityVector() {
+        return meanVelocity.add(localModifier);
+    }
     /** 阵风叠加后的风速（不含本地修正）。 */
     public ZenithVec3 velocityWithGustVector() { return meanVelocity.add(gustVelocity); }
 

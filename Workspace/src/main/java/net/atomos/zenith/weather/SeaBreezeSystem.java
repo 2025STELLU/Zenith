@@ -94,23 +94,11 @@ public class SeaBreezeSystem implements WeatherPhenomenon {
             }
         }
 
-        // 2) 有符号距离场：先算到"异类"格点的距离，再按自身是海/陆定正负
-        double[][] distToSea = chamferDistance(oceanMask, true);
-        double[][] distToLand = chamferDistance(oceanMask, false);
-        for (int i = 0; i < GRID; i++) {
-            for (int j = 0; j < GRID; j++) {
-                double v = oceanMask[i][j]
-                        ? -distToLand[i][j] * CELL
-                        : distToSea[i][j] * CELL;
-                // 整片同质（全陆/全海）时距离是"无穷"，直接进梯度会算出 INF-INF=NaN。
-                // 夹到有限的饱和值：均匀饱和 → 梯度为 0 → landwardDirection 返回 null，
-                // 该格点就没有海风（而不是拿到方向 0/0）。
-                if (!Double.isFinite(v) || Math.abs(v) > SATURATED_DISTANCE) {
-                    v = oceanMask[i][j] ? -SATURATED_DISTANCE : SATURATED_DISTANCE;
-                }
-                signedDist[i][j] = v;
-            }
-        }
+        // 2) 有符号距离场：陆地为正、海上为负（与季风共用同一份实现，WX-MS-01）
+        double[][] signed = CoastDistance.signedDistanceBlocks(oceanMask, CELL);
+        for (int i = 0; i < GRID; i++)
+            for (int j = 0; j < GRID; j++)
+                signedDist[i][j] = signed[i][j];
 
         // 3) 由 ∇D 求岸线法向 + 风场
         for (int i = 0; i < GRID; i++) {
@@ -161,40 +149,11 @@ public class SeaBreezeSystem implements WeatherPhenomenon {
     /**
      * 倒角距离变换（chamfer 1:√2），返回每个格点到最近的"异类"格点的距离（格为单位）。
      *
-     * @param mask     海陆掩膜
-     * @param wantSea  {@code true} 表示求到海洋的距离，{@code false} 求到陆地的距离
+     * @deprecated 已并入 {@link CoastDistance#chamfer}（与季风共用），保留仅为兼容外部调用。
      */
-    private static double[][] chamferDistance(boolean[][] mask, boolean wantSea) {
-        final double INF = 1e9;
-        double[][] d = new double[GRID][GRID];
-        for (int i = 0; i < GRID; i++)
-            for (int j = 0; j < GRID; j++)
-                d[i][j] = (mask[i][j] == wantSea) ? 0 : INF;
-
-        final double DIAG = Math.sqrt(2.0);
-        // 前向
-        for (int i = 0; i < GRID; i++) {
-            for (int j = 0; j < GRID; j++) {
-                double v = d[i][j];
-                if (i > 0) v = Math.min(v, d[i - 1][j] + 1);
-                if (j > 0) v = Math.min(v, d[i][j - 1] + 1);
-                if (i > 0 && j > 0) v = Math.min(v, d[i - 1][j - 1] + DIAG);
-                if (i > 0 && j + 1 < GRID) v = Math.min(v, d[i - 1][j + 1] + DIAG);
-                d[i][j] = v;
-            }
-        }
-        // 后向
-        for (int i = GRID - 1; i >= 0; i--) {
-            for (int j = GRID - 1; j >= 0; j--) {
-                double v = d[i][j];
-                if (i + 1 < GRID) v = Math.min(v, d[i + 1][j] + 1);
-                if (j + 1 < GRID) v = Math.min(v, d[i][j + 1] + 1);
-                if (i + 1 < GRID && j + 1 < GRID) v = Math.min(v, d[i + 1][j + 1] + DIAG);
-                if (i + 1 < GRID && j > 0) v = Math.min(v, d[i + 1][j - 1] + DIAG);
-                d[i][j] = v;
-            }
-        }
-        return d;
+    @Deprecated
+    static double[][] chamferDistance(boolean[][] mask, boolean wantSea) {
+        return CoastDistance.chamfer(mask, wantSea);
     }
 
     /**

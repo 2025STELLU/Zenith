@@ -1,12 +1,12 @@
 package net.atomos.zenith.weather;
 
+import net.minecraft.nbt.CompoundTag;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
-import java.util.Random;
 
 /**
  * 锋面：冷锋和暖锋。
@@ -18,6 +18,8 @@ import java.util.Random;
  */
 public class FrontSystem implements WeatherPhenomenon {
     public static final int MAX_FRONTS = 4;
+    public static final double MIN_LIFETIME_SECONDS = 7200;
+    public static final double MAX_EXTRA_LIFETIME_SECONDS = 7200;
 
     public enum FrontType { COLD, WARM }
 
@@ -25,7 +27,12 @@ public class FrontSystem implements WeatherPhenomenon {
         public FrontType type;
         public double x1, z1, x2, z2; // 锋线两端点（格）
         public double ageSeconds;
-        public double lifetimeSeconds = 7200 + Math.random() * 7200;
+        /**
+         * 寿命。旧实现写在字段初始化里用 {@code Math.random()}（SYS-08）：每种一条锋面
+         * 都从全局随机数取寿命，存档重启不可复现，也没法用一个种子重播。
+         * 现在由 {@link #newFront()} 从可序列化的 {@link ZenithRandom} 里取。
+         */
+        public double lifetimeSeconds = MIN_LIFETIME_SECONDS + MAX_EXTRA_LIFETIME_SECONDS * 0.5;
         public double intensity01 = 0.8;
         public double moveX, moveZ; // m/s，沿锋线法向移动
 
@@ -48,8 +55,23 @@ public class FrontSystem implements WeatherPhenomenon {
     }
 
     private final List<Front> fronts = new ArrayList<>();
-    private final Random random = new Random();
+    private final ZenithRandom random;
     private double spawnAccumulator = 0;
+
+    public FrontSystem() {
+        this(0L);
+    }
+
+    public FrontSystem(long seed) {
+        this.random = new ZenithRandom(seed);
+    }
+
+    private Front newFront() {
+        Front f = new Front();
+        f.lifetimeSeconds = MIN_LIFETIME_SECONDS
+                + random.nextDouble() * MAX_EXTRA_LIFETIME_SECONDS;
+        return f;
+    }
 
     @Override
     public void tick(ServerLevel level, double dtSeconds, WeatherContext ctx) {
@@ -67,7 +89,7 @@ public class FrontSystem implements WeatherPhenomenon {
             double cz = anchor.getZ() + Math.sin(ang) * dist;
             var l1s = ctx.l1().sample(cx, 120, cz);
 
-            Front f = new Front();
+            Front f = newFront();
             f.type = random.nextDouble() < 0.55 ? FrontType.COLD : FrontType.WARM;
             // 锋线走向：垂直于引导气流。旧公式把 atan2(x,z) 的"从 +Z 量起"
             // 按"从 +X 量起"解释了，正东/正南风下线会平行于风。
@@ -154,11 +176,64 @@ public class FrontSystem implements WeatherPhenomenon {
 
     /** 供调试/指令。 */
     public void spawnDebug(double x, double z, boolean cold) {
-        Front f = new Front();
+        Front f = newFront();
         f.type = cold ? FrontType.COLD : FrontType.WARM;
         f.x1 = x - 300; f.z1 = z;
         f.x2 = x + 300; f.z2 = z;
         f.moveX = 0; f.moveZ = 2;
         fronts.add(f);
+    }
+
+    // 存档（SYS-08）
+
+    @Override
+    public String saveKey() { return "fronts"; }
+
+    @Override
+    public CompoundTag save() {
+        CompoundTag tag = new CompoundTag();
+        tag.putLong("rng", random.state());
+        tag.putDouble("spawnAccumulator", spawnAccumulator);
+        tag.put("list", WeatherNbt.writeList(fronts, f -> {
+            CompoundTag t = new CompoundTag();
+            t.putString("type", f.type.name());
+            t.putDouble("x1", f.x1);
+            t.putDouble("z1", f.z1);
+            t.putDouble("x2", f.x2);
+            t.putDouble("z2", f.z2);
+            t.putDouble("age", f.ageSeconds);
+            t.putDouble("lifetime", f.lifetimeSeconds);
+            t.putDouble("intensity", f.intensity01);
+            t.putDouble("moveX", f.moveX);
+            t.putDouble("moveZ", f.moveZ);
+            return t;
+        }));
+        return tag;
+    }
+
+    @Override
+    public void load(CompoundTag tag) {
+        if (tag.contains("rng")) random.setState(tag.getLong("rng"));
+        spawnAccumulator = tag.getDouble("spawnAccumulator");
+        fronts.clear();
+        fronts.addAll(WeatherNbt.readList(tag, "list", t -> {
+            Front f = new Front();
+            try {
+                f.type = FrontType.valueOf(t.getString("type"));
+            } catch (IllegalArgumentException e) {
+                f.type = FrontType.COLD;
+            }
+            f.x1 = t.getDouble("x1");
+            f.z1 = t.getDouble("z1");
+            f.x2 = t.getDouble("x2");
+            f.z2 = t.getDouble("z2");
+            f.ageSeconds = t.getDouble("age");
+            f.lifetimeSeconds = Math.max(1.0, t.getDouble("lifetime"));
+            f.intensity01 = t.getDouble("intensity");
+            f.moveX = t.getDouble("moveX");
+            f.moveZ = t.getDouble("moveZ");
+            return f;
+        }));
+        while (fronts.size() > MAX_FRONTS) fronts.remove(fronts.size() - 1);
     }
 }

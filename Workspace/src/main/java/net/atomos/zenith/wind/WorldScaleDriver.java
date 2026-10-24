@@ -4,11 +4,23 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
 import net.atomos.zenith.weather.FogModel;
+import net.atomos.zenith.weather.ZenithRandom;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.ListTag;
+import net.minecraft.nbt.Tag;
 
 /**
  * 行星尺度天气驱动，服务端跑的。
- * 每格风 = 基流 + 行星波 + 气旋 + 对流团 + 龙卷，钳制 ±12 m/s。
+ * 每格风 = 基流 + 行星波 + 气旋 + 对流团，钳制 ±12 m/s。
  * 网格 384×384，每格 256 blocks，跟 L0 对齐。
+ *
+ * <p><b>周期化</b>：网格是环面（{@link #GRID_CELLS}），气旋/对流团跨过回卷边界时位置会突然
+ * 从 383 跳回 0。采样必须用最小镜像距离 {@link #wrapDelta}，否则边界两侧的风场不连续、
+ * 且世界坐标 {@code x<0} / {@code z<0} 的象限只能吃到高斯尾巴（DRV-01）。
+ *
+ * <p><b>龙卷不再在 L0 里算风</b>：核心 10–24 格、影响半径 48–128 格的涡旋落在 256 格网格中心
+ * 采样等于抽签，命中也是 {@code exp(-(r/rc)²)} ≈ 0（DRV-03）。龙卷现在由
+ * {@code weather.TornadoSystem} 逐点采样，本类只接收它的**大尺度**足迹（气压 + 加热）。
  */
 public class WorldScaleDriver {
     public static final double SOLVER_STEP_SECONDS = 0.05;
@@ -20,17 +32,20 @@ public class WorldScaleDriver {
     public static final double CYCLONE_CELL_MAX_PRESSURE_ANOMALY_PA = 1350.0;
     public static final double CONVECTIVE_CLUSTER_MAX_CONVERGENCE_MPS = 4.0;
     public static final double CONVECTIVE_CLUSTER_THERMAL_LOW_PA = 240.0;
-    public static final double TORNADO_MIN_STORM_ACTIVITY = 0.35;
-    public static final double TORNADO_MIN_SUPPORT = 0.75;
-    public static final double TORNADO_MIN_LIFETIME_SECONDS = 45.0;
-    public static final double TORNADO_MAX_LIFETIME_SECONDS = 140.0;
     public static final int DEFAULT_CYCLONE_CELL_COUNT = 6;
     public static final int MAX_CONVECTIVE_CLUSTERS = 6;
-    public static final int MAX_ACTIVE_TORNADO_VORTICES = 2;
     public static final double DRIVER_SPATIAL_SCALE_X = 0.11;
     public static final double DRIVER_SPATIAL_SCALE_Z = 0.09;
     public static final int GRID_CELLS = 384;
     public static final double CELL_SIZE_BLOCKS = 256.0;
+
+    /**
+     * 龙卷在 L0 上的足迹半径（格）。龙卷本身（48–128 格）远小于 256 格网格，
+     * L0 只该看到"这一带有强对流"的一团平滑低压，不该试图解析涡旋本身（DRV-03）。
+     */
+    public static final double TORNADO_L0_FOOTPRINT_BLOCKS = 1500.0;
+    /** 上述足迹中心的气压亏损（Pa），比气旋小两个量级。 */
+    public static final double TORNADO_L0_PRESSURE_PA = 90.0;
 
     /** 采样结果：L0 消费的全部强迫场。 */
     public record Sample(
@@ -55,7 +70,23 @@ public class WorldScaleDriver {
         public static Feedback none() { return new Feedback(0, 0, 0); }
     }
 
-    private final Random random;
+    /** 对流团宿主（供 {@code TornadoSystem} 决定在哪里生龙卷）。方块坐标。 */
+    public record ConvectiveHost(double x, double z, double radiusBlocks, double intensity01) {}
+
+    /**
+     * 位置相关的基础流偏置（WX-MS-01）：季风这类"大尺度、沿海岸加权"的环流，
+     * 直接加到基流上，而不是当作一个逐点叠加的现象。
+     *
+     * <p>参数是**方块坐标**（驱动器内部会从格坐标换算），返回 {@code {biasX, biasZ}}（m/s）；
+     * 域外/无偏置时返回 {@code null} 或 {@code {0,0}}。
+     */
+    public interface BaseFlowBias {
+        double[] at(double blockX, double blockZ);
+    }
+
+    private final ZenithRandom random;
+
+    private BaseFlowBias baseFlowBias;
 
     private double baseFlowX = 3.0;
     private double baseFlowZ = 0.5;
@@ -67,10 +98,15 @@ public class WorldScaleDriver {
 
     private final List<CycloneCell> cyclones = new ArrayList<>();
     private final List<ConvectiveCluster> clusters = new ArrayList<>();
-    private final List<TornadoVortex> tornadoes = new ArrayList<>();
+
+    /**
+     * 龙卷上报给 L0 的大尺度足迹，元素为 {@code {xBlocks, zBlocks, strength01}}。
+     * 每 tick 由 {@link #advance} 清空、{@code TornadoSystem.tick} 重新写入。
+     */
+    private final List<double[]> tornadoFootprints = new ArrayList<>();
 
     public WorldScaleDriver(long seed) {
-        this.random = new Random(seed ^ 0x9E3779B97F4A7C15L);
+        this.random = new ZenithRandom(seed ^ 0x9E3779B97F4A7C15L);
         // 半球（科里奥利符号）统一由 HemisphereConvention 提供，默认北半球
         for (int i = 0; i < DEFAULT_CYCLONE_CELL_COUNT; i++) {
             cyclones.add(CycloneCell.spawn(random, GRID_CELLS));
@@ -85,6 +121,7 @@ public class WorldScaleDriver {
     public void advance(double dtSeconds, double timeOfDay01, boolean raining, boolean thundering,
                         Feedback feedback) {
         timeSeconds += dtSeconds;
+        tornadoFootprints.clear();
 
         // 风暴活动度：向目标松弛，目标由 L1 反馈的不稳定/切变/水汽辐合拼出来
         double target = 0.12
@@ -119,19 +156,25 @@ public class WorldScaleDriver {
 
         for (CycloneCell c : cyclones) c.advance(dtSeconds, random, GRID_CELLS);
         for (ConvectiveCluster c : clusters) c.advance(dtSeconds, random, GRID_CELLS, cyclones, stormActivity);
-        tornadoes.removeIf(t -> !t.advance(dtSeconds));
+    }
 
-        // 龙卷：在对流团里挑个宿主，条件够苛刻才生
-        if (tornadoes.size() < MAX_ACTIVE_TORNADO_VORTICES
-                && stormActivity > TORNADO_MIN_STORM_ACTIVITY
-                && random.nextDouble() < dtSeconds * 0.02 * stormActivity) {
-            double support = 0.5 * stormActivity
-                    + 0.5 * clamp01(feedback.meanLowLevelShear() / 0.015);
-            if (support >= TORNADO_MIN_SUPPORT && !clusters.isEmpty()) {
-                ConvectiveCluster host = clusters.get(random.nextInt(clusters.size()));
-                tornadoes.add(TornadoVortex.spawn(random, host, support));
-            }
-        }
+    /** 龙卷把自己的位置报给 L0（方块坐标 + 0..1 强度）。 */
+    public void reportTornadoFootprint(double xBlocks, double zBlocks, double strength01) {
+        if (tornadoFootprints.size() >= 8) return;
+        tornadoFootprints.add(new double[]{xBlocks, zBlocks, clamp01(strength01)});
+    }
+
+    /** 装上/卸掉位置相关的基础流偏置（季风，WX-MS-01）。传 {@code null} 表示关闭。 */
+    public void setBaseFlowBias(BaseFlowBias bias) {
+        this.baseFlowBias = bias;
+    }
+
+    /** 供 {@code TornadoSystem} 挑宿主：返回当前对流团的中心与半径（方块坐标）。 */
+    public ConvectiveHost pickConvectiveHost(Random rnd) {
+        if (clusters.isEmpty()) return null;
+        ConvectiveCluster c = clusters.get(rnd.nextInt(clusters.size()));
+        return new ConvectiveHost(c.x * CELL_SIZE_BLOCKS, c.z * CELL_SIZE_BLOCKS,
+                c.radius, c.intensity);
     }
 
     // sample
@@ -143,15 +186,26 @@ public class WorldScaleDriver {
 
         double u = baseFlowX + waveScale * (0.90 * Math.sin(phi) + 0.35 * Math.sin(psi));
         double w = baseFlowZ + waveScale * (0.90 * Math.sin(psi + 1.7) + 0.35 * Math.sin(phi - 0.6));
+
+        // 季风（WX-MS-01）：作为**基础流偏置**按位置加权，而不是维度均匀的现象风。
+        // L0 会对整格风做双线性插值，所以这里用格中心求值就够，采样点仍拿到连续场。
+        if (baseFlowBias != null) {
+            double[] bias = baseFlowBias.at(cellX * CELL_SIZE_BLOCKS, cellZ * CELL_SIZE_BLOCKS);
+            if (bias != null) {
+                u += bias[0];
+                w += bias[1];
+            }
+        }
         double pressure = 0;
         double tempBias = 0;
         double humidity = 0.5;
         double convHeat = 0, convMoist = 0, convInX = 0, convInZ = 0, convEnv = 0;
-        double torX = 0, torZ = 0, torHeat = 0, torMoist = 0, torUp = 0;
+        double torHeat = 0, torMoist = 0, torUp = 0;
 
         for (CycloneCell c : cyclones) {
-            double dx = (cellX - c.x) * CELL_SIZE_BLOCKS;
-            double dz = (cellZ - c.z) * CELL_SIZE_BLOCKS;
+            // 最小镜像距离：网格是 384 格的环面，跨回卷边界的气旋不能瞬移（DRV-01）
+            double dx = wrapDelta(cellX - c.x, GRID_CELLS) * CELL_SIZE_BLOCKS;
+            double dz = wrapDelta(cellZ - c.z, GRID_CELLS) * CELL_SIZE_BLOCKS;
             double r = Math.sqrt(dx * dx + dz * dz);
             double outerNorm = r / c.outerRadius;
             double coreNorm = r / c.coreRadius;
@@ -176,8 +230,8 @@ public class WorldScaleDriver {
         }
 
         for (ConvectiveCluster c : clusters) {
-            double dx = (cellX - c.x) * CELL_SIZE_BLOCKS;
-            double dz = (cellZ - c.z) * CELL_SIZE_BLOCKS;
+            double dx = wrapDelta(cellX - c.x, GRID_CELLS) * CELL_SIZE_BLOCKS;
+            double dz = wrapDelta(cellZ - c.z, GRID_CELLS) * CELL_SIZE_BLOCKS;
             double r = Math.sqrt(dx * dx + dz * dz);
             double norm = r / c.radius;
             if (norm > 3.0) continue;
@@ -195,21 +249,25 @@ public class WorldScaleDriver {
             humidity += 0.2 * c.intensity * g;
         }
 
-        for (TornadoVortex t : tornadoes) {
-            double dx = (cellX - t.x) * CELL_SIZE_BLOCKS;
-            double dz = (cellZ - t.z) * CELL_SIZE_BLOCKS;
-            double r = Math.sqrt(dx * dx + dz * dz);
-            if (r > t.influenceRadius) continue;
-            double coreG = Math.exp(-(r / t.coreRadius) * (r / t.coreRadius));
-            double inv = r > 1e-3 ? 1.0 / r : 0;
-            double tangential = t.maxWind * coreG * t.intensityEnvelope();
-            // 切向同样走统一手性：旧式 (-dz, +dx) 在 (x,z) 上是顺时针
-            double[] tan = HemisphereConvention.tangential(dx, dz, true);
-            torX += tan[0] * inv * tangential;
-            torZ += tan[1] * inv * tangential;
-            torHeat += 3.0 * coreG;
-            torMoist += 0.25 * coreG;
-            torUp = Math.max(torUp, coreG);
+        // 龙卷：L0 只收它的**大尺度**足迹。逐个涡旋在 256 格网格上采样是混叠的（DRV-03），
+        // 切向风全部交给 TornadoSystem 逐点算，这里只有一团平滑的低压 + 加热。
+        double cellBlockX = cellX * CELL_SIZE_BLOCKS;
+        double cellBlockZ = cellZ * CELL_SIZE_BLOCKS;
+        for (double[] t : tornadoFootprints) {
+            // 足迹也用最小镜像距离（DRV-01 同类）：龙卷用的是世界方块坐标，可以和
+            // L0 格点隔着一个环面周期。不环绕的话，边界另一侧的龙卷对气压毫无贡献。
+            double dx = wrapDelta((cellBlockX - t[0]) / CELL_SIZE_BLOCKS, GRID_CELLS)
+                    * CELL_SIZE_BLOCKS;
+            double dz = wrapDelta((cellBlockZ - t[1]) / CELL_SIZE_BLOCKS, GRID_CELLS)
+                    * CELL_SIZE_BLOCKS;
+            double g = Math.exp(-(dx * dx + dz * dz)
+                    / (2.0 * TORNADO_L0_FOOTPRINT_BLOCKS * TORNADO_L0_FOOTPRINT_BLOCKS));
+            if (g < 1e-4) continue;
+            double s = g * t[2];
+            pressure += -TORNADO_L0_PRESSURE_PA * s;
+            torHeat += 0.8 * s;
+            torMoist += 0.05 * s;
+            torUp = Math.max(torUp, 0.35 * s);
         }
 
         // 按模长钳制：分量各自钳到 ±12 会让对角方向最到 17 m/s，并扭转风向（DRV-06）
@@ -223,18 +281,93 @@ public class WorldScaleDriver {
 
         return new Sample(u, w, pressure, tempBias, humidity, stormActivity,
                 convHeat, convMoist, convInX, convInZ, convEnv,
-                torX, torZ, torHeat, torMoist, torUp);
+                0, 0, torHeat, torMoist, torUp);
     }
 
     public double stormActivity() { return stormActivity; }
-    public int activeTornadoCount() { return tornadoes.size(); }
-    public List<TornadoVortex> tornadoes() { return List.copyOf(tornadoes); }
+
+    public int activeConvectiveClusterCount() { return clusters.size(); }
+
+    /**
+     * 环面上的最小镜像位移，返回 {@code [-period/2, period/2)}（DRV-01）。
+     *
+     * <p>{@code delta = 383.5}、{@code period = 384} → {@code -0.5}：离 0 号格只差半格，
+     * 而不是 383.5 格。
+     */
+    public static double wrapDelta(double delta, int period) {
+        double p = period;
+        return delta - p * Math.floor(delta / p + 0.5);
+    }
 
     private static double clamp(double v, double lo, double hi) {
         return v < lo ? lo : Math.min(v, hi);
     }
 
     private static double clamp01(double v) { return clamp(v, 0, 1); }
+
+    // 存档（SYS-08）
+
+    /**
+     * 驱动器状态 → NBT。
+     *
+     * <p>{@link ZenithRandom} 是可序列化的 SplitMix64，状态就是一个 {@code long}，所以
+     * 连随机游走的位置一起存——重启后天气从原处继续，同一存档可复现（SYS-08）。
+     * 旧实现用 {@code java.util.Random}，48 位种子拿不出来，只能丢掉游走状态。
+     */
+    public CompoundTag save() {
+        CompoundTag tag = new CompoundTag();
+        tag.putLong("rngState", random.state());
+        tag.putDouble("baseFlowX", baseFlowX);
+        tag.putDouble("baseFlowZ", baseFlowZ);
+        tag.putDouble("forcedBaseFlowX", forcedBaseFlowX);
+        tag.putDouble("forcedBaseFlowZ", forcedBaseFlowZ);
+        tag.putDouble("stormActivity", stormActivity);
+        tag.putDouble("synopticLull", synopticLull);
+        tag.putDouble("timeSeconds", timeSeconds);
+
+        ListTag cyc = new ListTag();
+        for (CycloneCell c : cyclones) cyc.add(c.save());
+        tag.put("cyclones", cyc);
+
+        ListTag cl = new ListTag();
+        for (ConvectiveCluster c : clusters) cl.add(c.save());
+        tag.put("clusters", cl);
+        return tag;
+    }
+
+    public void load(CompoundTag tag) {
+        if (tag.contains("rngState")) random.setState(tag.getLong("rngState"));
+        baseFlowX = tag.getDouble("baseFlowX");
+        baseFlowZ = tag.getDouble("baseFlowZ");
+        forcedBaseFlowX = tag.getDouble("forcedBaseFlowX");
+        forcedBaseFlowZ = tag.getDouble("forcedBaseFlowZ");
+        stormActivity = clamp01(tag.getDouble("stormActivity"));
+        synopticLull = clamp(tag.getDouble("synopticLull"),
+                SYNOPTIC_LULL_MIN_FACTOR, 1.0);
+        timeSeconds = tag.getDouble("timeSeconds");
+
+        ListTag cyc = tag.getList("cyclones", Tag.TAG_COMPOUND);
+        if (!cyc.isEmpty()) {
+            cyclones.clear();
+            for (int i = 0; i < cyc.size(); i++) cyclones.add(CycloneCell.load(cyc.getCompound(i)));
+        }
+        ListTag cl = tag.getList("clusters", Tag.TAG_COMPOUND);
+        if (!cl.isEmpty()) {
+            clusters.clear();
+            for (int i = 0; i < cl.size(); i++) clusters.add(ConvectiveCluster.load(cl.getCompound(i)));
+        }
+        // 坏档兜底：列表全空时重新播种，别让整个维度从此没有天气
+        if (cyclones.isEmpty()) {
+            for (int i = 0; i < DEFAULT_CYCLONE_CELL_COUNT; i++) {
+                cyclones.add(CycloneCell.spawn(random, GRID_CELLS));
+            }
+        }
+        if (clusters.isEmpty()) {
+            for (int i = 0; i < MAX_CONVECTIVE_CLUSTERS; i++) {
+                clusters.add(ConvectiveCluster.spawn(random, GRID_CELLS, cyclones));
+            }
+        }
+    }
 
     // 气旋单体
 
@@ -281,6 +414,30 @@ public class WorldScaleDriver {
             if (z < 0) z += gridCells;
             if (z >= gridCells) z -= gridCells;
         }
+
+        CompoundTag save() {
+            CompoundTag t = new CompoundTag();
+            t.putDouble("x", x);
+            t.putDouble("z", z);
+            t.putDouble("intensity", intensity);
+            t.putDouble("outerRadius", outerRadius);
+            t.putDouble("coreRadius", coreRadius);
+            t.putBoolean("lowPressure", lowPressure);
+            t.putDouble("phase", phase);
+            return t;
+        }
+
+        static CycloneCell load(CompoundTag t) {
+            CycloneCell c = new CycloneCell();
+            c.x = t.getDouble("x");
+            c.z = t.getDouble("z");
+            c.intensity = t.getDouble("intensity");
+            c.outerRadius = t.getDouble("outerRadius");
+            c.coreRadius = t.getDouble("coreRadius");
+            c.lowPressure = t.getBoolean("lowPressure");
+            c.phase = t.getDouble("phase");
+            return c;
+        }
     }
 
     // 对流团
@@ -291,14 +448,24 @@ public class WorldScaleDriver {
         double radius = 4000;
         double orbitAngle;
         double orbitRadius;
+        /**
+         * 宿主气旋下标：生成时定下来就不再改。
+         * 旧实现每帧用 {@code (int)(Math.abs(orbitAngle) % size)} 现算，{@code orbitAngle} 以
+         * 0.01 rad/s 增长，每约 628 秒宿主 +1，对流团瞬移数万格（DRV-02）。
+         */
+        int hostIndex;
 
         static ConvectiveCluster spawn(Random random, int gridCells, List<CycloneCell> cyclones) {
             ConvectiveCluster c = new ConvectiveCluster();
-            CycloneCell host = cyclones.get(random.nextInt(cyclones.size()));
+            c.hostIndex = cyclones.isEmpty() ? 0 : random.nextInt(cyclones.size());
+            CycloneCell host = cyclones.isEmpty() ? null : cyclones.get(c.hostIndex);
             c.orbitRadius = 0.3 + random.nextDouble() * 0.5;
             c.orbitAngle = random.nextDouble() * Math.PI * 2;
-            c.x = host.x + Math.cos(c.orbitAngle) * host.outerRadius * c.orbitRadius / CELL_SIZE_BLOCKS;
-            c.z = host.z + Math.sin(c.orbitAngle) * host.outerRadius * c.orbitRadius / CELL_SIZE_BLOCKS;
+            double hx = host == null ? gridCells * 0.5 : host.x;
+            double hz = host == null ? gridCells * 0.5 : host.z;
+            double or = host == null ? 4000 : host.outerRadius;
+            c.x = hx + Math.cos(c.orbitAngle) * or * c.orbitRadius / CELL_SIZE_BLOCKS;
+            c.z = hz + Math.sin(c.orbitAngle) * or * c.orbitRadius / CELL_SIZE_BLOCKS;
             c.intensity = 0.3 + random.nextDouble() * 0.5;
             c.radius = 3000 + random.nextDouble() * 3000;
             return c;
@@ -308,7 +475,7 @@ public class WorldScaleDriver {
                      double stormActivity) {
             orbitAngle += dt * 0.01;
             if (!cyclones.isEmpty()) {
-                CycloneCell host = cyclones.get((int) (Math.abs(orbitAngle) % cyclones.size()));
+                CycloneCell host = cyclones.get(Math.floorMod(hostIndex, cyclones.size()));
                 x = host.x + Math.cos(orbitAngle) * host.outerRadius * orbitRadius / CELL_SIZE_BLOCKS;
                 z = host.z + Math.sin(orbitAngle) * host.outerRadius * orbitRadius / CELL_SIZE_BLOCKS;
             }
@@ -316,57 +483,41 @@ public class WorldScaleDriver {
             intensity += (target - intensity) * Math.min(1.0, dt / 120.0);
             intensity += (random.nextDouble() - 0.5) * dt * 0.01;
             intensity = clamp01(intensity);
-        }
-    }
-
-    // 龙卷
-
-    public static final class TornadoVortex {
-        public double x, z;             // 格坐标（double 精度）
-        public double maxWind;          // m/s 18..42
-        public double coreRadius;       // blocks 10..24
-        public double influenceRadius;  // blocks 48..128
-        private double ageSeconds;
-        private double lifetimeSeconds;
-
-        /**
-         * 旋向：北半球龙卷是气旋式（逆时针），南半球顺时针。
-         * 旧实现每次生成独立随机，等于无视半球（DRV-05 的同根问题）。
-         */
-        public double spin() {
-            return HemisphereConvention.coriolisSign();
+            // 宿主 + 轨道偏移可能把位置推到 [0, GRID) 之外（DRV-01 同类问题）。
+            // 不折回来，pickConvectiveHost() 会把龙卷放到世界边界外的方块坐标上，
+            // 而 L0 是按环面采样它的——两边对不上，足迹永远命不中。
+            x = wrapCell(x, gridCells);
+            z = wrapCell(z, gridCells);
         }
 
-        static TornadoVortex spawn(Random random, ConvectiveCluster host, double support) {
-            TornadoVortex t = new TornadoVortex();
-            t.x = host.x + (random.nextDouble() - 0.5) * 4;
-            t.z = host.z + (random.nextDouble() - 0.5) * 4;
-            t.maxWind = 18 + random.nextDouble() * 24;
-            t.coreRadius = 10 + random.nextDouble() * 14;
-            t.influenceRadius = 48 + random.nextDouble() * 80;
-            t.lifetimeSeconds = TORNADO_MIN_LIFETIME_SECONDS
-                    + random.nextDouble() * (TORNADO_MAX_LIFETIME_SECONDS - TORNADO_MIN_LIFETIME_SECONDS);
-            t.ageSeconds = 0;
+        /** 把格坐标折回 {@code [0, gridCells)}。 */
+        static double wrapCell(double v, int gridCells) {
+            double m = v % gridCells;
+            return m < 0 ? m + gridCells : m;
+        }
+
+        CompoundTag save() {
+            CompoundTag t = new CompoundTag();
+            t.putDouble("x", x);
+            t.putDouble("z", z);
+            t.putDouble("intensity", intensity);
+            t.putDouble("radius", radius);
+            t.putDouble("orbitAngle", orbitAngle);
+            t.putDouble("orbitRadius", orbitRadius);
+            t.putInt("hostIndex", hostIndex);
             return t;
         }
 
-        /** @return false 表示生命结束 */
-        boolean advance(double dt) {
-            ageSeconds += dt;
-            x += dt * 0.01;
-            z += dt * 0.006;
-            double t = ageSeconds / lifetimeSeconds;
-            return t < 1.0;
+        static ConvectiveCluster load(CompoundTag t) {
+            ConvectiveCluster c = new ConvectiveCluster();
+            c.x = t.getDouble("x");
+            c.z = t.getDouble("z");
+            c.intensity = t.getDouble("intensity");
+            c.radius = t.getDouble("radius");
+            c.orbitAngle = t.getDouble("orbitAngle");
+            c.orbitRadius = t.getDouble("orbitRadius");
+            c.hostIndex = t.getInt("hostIndex");
+            return c;
         }
-
-        public double intensityEnvelope() {
-            double t = clamp01(ageSeconds / lifetimeSeconds);
-            if (t < 0.2) return t / 0.2;
-            if (t > 0.7) return 1.0 - (t - 0.7) / 0.3;
-            return 1.0;
-        }
-
-        public double ageSeconds() { return ageSeconds; }
-        public double lifetimeSeconds() { return lifetimeSeconds; }
     }
 }

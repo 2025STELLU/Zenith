@@ -7,8 +7,8 @@ import net.atomos.zenith.weather.DustDevilSystem;
 import net.atomos.zenith.weather.FrontSystem;
 import net.atomos.zenith.weather.SquallLineSystem;
 import net.atomos.zenith.weather.StormCellSystem;
+import net.atomos.zenith.weather.TornadoSystem;
 import net.atomos.zenith.weather.TyphoonSystem;
-import net.atomos.zenith.wind.WorldScaleDriver;
 import net.minecraft.network.codec.ByteBufCodecs;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
@@ -187,7 +187,7 @@ public record WeatherSnapshotPacket(
                                               List<FrontSystem.Front> fronts,
                                               List<DustDevilSystem.DustDevil> devils,
                                               List<SquallLineSystem.SquallLine> squallLines,
-                                              List<WorldScaleDriver.TornadoVortex> tornadoVortices) {
+                                              List<TornadoSystem.Tornado> tornadoes) {
         List<TyphoonInfo> ti = new ArrayList<>();
         for (TyphoonSystem.Typhoon t : typhoons) {
             ti.add(new TyphoonInfo(t.name, t.x, t.z, (float) t.vmaxMps,
@@ -211,10 +211,9 @@ public record WeatherSnapshotPacket(
             qi.add(new SquallInfo(l.x1, l.z1, l.x2, l.z2));
         }
         List<TornadoInfo> ni = new ArrayList<>();
-        for (WorldScaleDriver.TornadoVortex t : tornadoVortices) {
-            // t.x/z 是驱动格单位，客户端按方块坐标画 → 转成方块
-            ni.add(new TornadoInfo(t.x * WorldScaleDriver.CELL_SIZE_BLOCKS,
-                    t.z * WorldScaleDriver.CELL_SIZE_BLOCKS, (float) t.maxWind, (float) t.coreRadius,
+        for (TornadoSystem.Tornado t : tornadoes) {
+            // t.x/z 已经是方块坐标（旧实现是驱动格，这里曾经 ×256）
+            ni.add(new TornadoInfo(t.x, t.z, (float) t.maxWind, (float) t.coreRadius,
                     (float) t.intensityEnvelope(), (float) t.spin()));
         }
         return new WeatherSnapshotPacket((float) stormActivity, tornadoCount, thermalCount,

@@ -1,13 +1,13 @@
 package net.atomos.zenith.weather;
 
 import net.atomos.zenith.wind.HemisphereConvention;
+import net.minecraft.nbt.CompoundTag;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
-import java.util.Random;
 
 /**
  * 台风：暖心涡旋 + 眼墙 + 螺旋雨带。
@@ -86,13 +86,21 @@ public class TyphoonSystem implements WeatherPhenomenon {
     }
 
     private final List<Typhoon> typhoons = new ArrayList<>();
-    private final Random random = new Random();
+    private final ZenithRandom random;
     private double spawnAccumulator = 0;
     private int nameCounter = 0;
     private static final String[] NAMES = {
             "天鹅", "海燕", "凤凰", "麒麟", "玄武", "朱雀", "白虎", "青龙",
             "鲲鹏", "烛龙", "应龙", "鸾鸟", "毕方", "穷奇", "饕餮", "梼杌"
     };
+
+    public TyphoonSystem() {
+        this(0L);
+    }
+
+    public TyphoonSystem(long seed) {
+        this.random = new ZenithRandom(seed);
+    }
 
     @Override
     public void tick(ServerLevel level, double dtSeconds, WeatherContext ctx) {
@@ -280,5 +288,56 @@ public class TyphoonSystem implements WeatherPhenomenon {
         t.vmaxMps = 45;
         t.name = NAMES[nameCounter++ % NAMES.length];
         typhoons.add(t);
+    }
+
+    // 存档（SYS-08）
+
+    @Override
+    public String saveKey() { return "typhoons"; }
+
+    @Override
+    public CompoundTag save() {
+        CompoundTag tag = new CompoundTag();
+        tag.putLong("rng", random.state());
+        tag.putInt("nameCounter", nameCounter);
+        tag.putDouble("spawnAccumulator", spawnAccumulator);
+        tag.put("list", WeatherNbt.writeList(typhoons, t -> {
+            CompoundTag c = new CompoundTag();
+            c.putDouble("x", t.x);
+            c.putDouble("z", t.z);
+            c.putDouble("vmax", t.vmaxMps);
+            c.putDouble("rmax", t.rmaxBlocks);
+            c.putDouble("eyeRadius", t.eyeRadiusBlocks);
+            c.putDouble("influenceRadius", t.influenceRadiusBlocks);
+            c.putDouble("age", t.ageSeconds);
+            c.putDouble("intensity", t.intensity01);
+            c.putDouble("groundY", t.groundY);
+            c.putString("name", t.name);
+            return c;
+        }));
+        return tag;
+    }
+
+    @Override
+    public void load(CompoundTag tag) {
+        if (tag.contains("rng")) random.setState(tag.getLong("rng"));
+        nameCounter = tag.getInt("nameCounter");
+        spawnAccumulator = tag.getDouble("spawnAccumulator");
+        typhoons.clear();
+        typhoons.addAll(WeatherNbt.readList(tag, "list", c -> {
+            Typhoon t = new Typhoon();
+            t.x = c.getDouble("x");
+            t.z = c.getDouble("z");
+            t.vmaxMps = c.getDouble("vmax");
+            t.rmaxBlocks = Math.max(1.0, c.getDouble("rmax"));
+            t.eyeRadiusBlocks = c.getDouble("eyeRadius");
+            t.influenceRadiusBlocks = Math.max(t.rmaxBlocks, c.getDouble("influenceRadius"));
+            t.ageSeconds = c.getDouble("age");
+            t.intensity01 = c.getDouble("intensity");
+            t.groundY = c.getDouble("groundY");
+            t.name = c.getString("name");
+            return t;
+        }));
+        while (typhoons.size() > MAX_TYPHOONS) typhoons.remove(typhoons.size() - 1);
     }
 }

@@ -12,6 +12,9 @@ import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+
 /** 风速计：右键显示当前位置风速/风向/湍流。 */
 public class WindMeterItem extends Item {
     public WindMeterItem() {
@@ -33,11 +36,14 @@ public class WindMeterItem extends Item {
                 double toBearing = (180 - dirDeg + 360) % 360;
                 // 气象惯例报来向
                 double fromBearing = (toBearing + 180) % 360;
-                String compass = compass16(fromBearing);
+                // 方位走 translatable：中文客户端显示"东北"，而不是写死的 "NE"（CMD-02）。
+                // 数字在这里用 BigDecimal 定好位数（与服务器 Locale 无关，永远用 '.'），
+                // 不再用 String.format("%.1f") 把格式硬编码进服务端字符串。
                 serverPlayer.displayClientMessage(Component.translatable("message.zenith.wind_meter",
-                        String.format("%.1f", speed), compass,
-                        String.format("%.0f", fromBearing),
-                        String.format("%.0f%%", wind.turbulenceIntensity() * 100)), true);
+                        trim(speed, 1),
+                        Component.translatable(compass16Key(fromBearing)),
+                        String.valueOf(Math.round(fromBearing)),
+                        Math.round(wind.turbulenceIntensity() * 100) + "%"), true);
             } else {
                 serverPlayer.displayClientMessage(
                         Component.translatable("message.zenith.wind_meter_unavailable"), true);
@@ -46,10 +52,20 @@ public class WindMeterItem extends Item {
         return InteractionResultHolder.sidedSuccess(stack, level.isClientSide);
     }
 
-    /** bearing："北为0、顺时针"的罗盘角，转 16 方位名。 */
-    private static String compass16(double bearing) {
-        String[] names = {"N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
-                "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"};
-        return names[(int) Math.round(bearing / 22.5) % 16];
+    /** 定点小数、去掉多余的 0，且不受默认 Locale 影响（{@code BigDecimal.toString} 永远是 '.'）。 */
+    private static String trim(double value, int decimals) {
+        if (!Double.isFinite(value)) return "0";
+        return BigDecimal.valueOf(value)
+                .setScale(decimals, RoundingMode.HALF_UP)
+                .stripTrailingZeros()
+                .toPlainString();
+    }
+
+    /** bearing："北为0、顺时针"的罗盘角，转 16 方位的翻译键（CMD-02）。 */
+    static String compass16Key(double bearing) {
+        String[] keys = {"n", "nne", "ne", "ene", "e", "ese", "se", "sse",
+                "s", "ssw", "sw", "wsw", "w", "wnw", "nw", "nnw"};
+        int idx = (int) Math.round(bearing / 22.5);
+        return "zenith.compass." + keys[Math.floorMod(idx, 16)];
     }
 }

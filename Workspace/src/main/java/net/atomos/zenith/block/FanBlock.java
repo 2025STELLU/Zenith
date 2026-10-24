@@ -27,7 +27,18 @@ import org.jetbrains.annotations.Nullable;
 public class FanBlock extends Block implements EntityBlock {
     public static final DirectionProperty FACING = BlockStateProperties.FACING;
     public static final IntegerProperty SPEED = IntegerProperty.create("speed", 0, 3);
-    public static final float[] SPEED_MPS = {0f, 4f, 8f, 12f};
+    /** 各档位出口风速（m/s）。私有 + 只读访问器：暴露可变 public 数组谁都能改（BLK-08）。 */
+    private static final float[] SPEED_MPS = {0f, 4f, 8f, 12f};
+
+    /** 档位 → 出口风速（m/s）。越界档位按 0 处理。 */
+    public static float speedMps(int level) {
+        return (level < 0 || level >= SPEED_MPS.length) ? 0f : SPEED_MPS[level];
+    }
+
+    /** 最大档位（右键循环用）。 */
+    public static int maxSpeedLevel() {
+        return SPEED_MPS.length - 1;
+    }
 
     public FanBlock() {
         super(ZenithBlocks.fanProps());
@@ -48,10 +59,12 @@ public class FanBlock extends Block implements EntityBlock {
     protected InteractionResult useWithoutItem(BlockState state, Level level, BlockPos pos,
                                                Player player, BlockHitResult hit) {
         if (!level.isClientSide) {
-            int next = (state.getValue(SPEED) + 1) % 4;
+            int next = (state.getValue(SPEED) + 1) % (maxSpeedLevel() + 1);
             level.setBlock(pos, state.setValue(SPEED, next), 3);
+            // 数值作为参数交给翻译串（CMD-02），格式由客户端语言决定。
+            // 档位风速按设计是整数（0/4/8/12），这里取整避免显示成 "4.0 m/s"。
             player.displayClientMessage(Component.translatable("message.zenith.fan_speed",
-                    String.format("%.0f m/s", SPEED_MPS[next])), true);
+                    Component.translatable("zenith.unit.mps", (int) speedMps(next))), true);
         }
         return InteractionResult.sidedSuccess(level.isClientSide);
     }
