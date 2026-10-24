@@ -8,3 +8,13 @@ Workspace/.idea/
 
 # 审计临时文件
 .tmp*.md
+
+# 本地编译/自检脚手架（javac 直编 + 离线数值验证，不是发布内容）
+.javac-*
+.javac-out*/
+.libs/
+.verify/
+.check*.ps1
+.filter*.ps1
+.javap.ps1
+.verify.ps1
