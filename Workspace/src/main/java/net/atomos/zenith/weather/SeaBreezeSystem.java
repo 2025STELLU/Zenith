@@ -37,6 +37,15 @@ public class SeaBreezeSystem implements WeatherPhenomenon {
     /** 距离场饱和值：超过它的距离一律视作"离岸极远"，避免整片同质时出现无穷大。 */
     private static final double SATURATED_DISTANCE = 1.0e6;
 
+    /**
+     * 网格中心的下标（SYS-06）。
+     *
+     * <p>旧代码建场用 {@code GRID / 2}（整数除法 = 16），采样用 {@code GRID / 2.0}（16.5）：
+     * 33 格网格的真实中心是下标 16，采样却按 16.5 换算，整张场系统性偏移半个格 = 32 格。
+     * 现在统一用 {@code (GRID - 1) / 2.0}。
+     */
+    private static final double CENTER_INDEX = (GRID - 1) / 2.0;
+
     private final double[][] breezeU = new double[GRID][GRID];
     private final double[][] breezeW = new double[GRID][GRID];
     private final double[][] frontFactor = new double[GRID][GRID];
@@ -54,6 +63,14 @@ public class SeaBreezeSystem implements WeatherPhenomenon {
     private final double[][] signedDist = new double[GRID][GRID];
 
     private double focusX, focusZ;
+    /**
+     * 建场时用的锚点（SYS-06）。
+     *
+     * <p>旧实现每 tick 更新 {@link #focusX}/{@link #focusZ}，但场每 {@value #REFRESH_TICKS} tick
+     * 才重算一次：两次重算之间，采样用**新焦点**去解**旧场**的索引，海风跟着玩家滑走。
+     * 现在把建场锚点单独存下来，采样只认它；焦点变了就只等下一次重算。
+     */
+    private double fieldFocusX, fieldFocusZ;
     private boolean hasField = false;
     /** 海风锋离岸距离（blocks），随白天推进、夜间回退。 */
     private double frontInlandDistance = 0;
@@ -87,8 +104,8 @@ public class SeaBreezeSystem implements WeatherPhenomenon {
         // 1) 海陆掩膜 + 地表高度
         for (int i = 0; i < GRID; i++) {
             for (int j = 0; j < GRID; j++) {
-                double bx = focusX + (i - GRID / 2) * CELL;
-                double bz = focusZ + (j - GRID / 2) * CELL;
+                double bx = focusX + (i - CENTER_INDEX) * CELL;
+                double bz = focusZ + (j - CENTER_INDEX) * CELL;
                 oceanMask[i][j] = ctx.terrain().isOceanAt(bx, bz);
                 groundY[i][j] = ctx.terrain().heightAt(bx, bz);
             }
@@ -99,6 +116,10 @@ public class SeaBreezeSystem implements WeatherPhenomenon {
         for (int i = 0; i < GRID; i++)
             for (int j = 0; j < GRID; j++)
                 signedDist[i][j] = signed[i][j];
+
+        // 建场锚点记下来（SYS-06）：之后采样只认它，直到下一次重算
+        fieldFocusX = focusX;
+        fieldFocusZ = focusZ;
 
         // 3) 由 ∇D 求岸线法向 + 风场
         for (int i = 0; i < GRID; i++) {
@@ -179,8 +200,10 @@ public class SeaBreezeSystem implements WeatherPhenomenon {
     @Override
     public WindContribution sample(double x, double y, double z, double baseWindX, double baseWindZ) {
         if (!hasField) return WindContribution.NONE;
-        double fi = (x - focusX) / CELL + GRID / 2.0;
-        double fj = (z - focusZ) / CELL + GRID / 2.0;
+        // SYS-06：索引用**建场锚点**，不是当前焦点。两次重算之间焦点会变，
+        // 拿新焦点去解旧场的索引会让海风跟着玩家滑动。
+        double fi = (x - fieldFocusX) / CELL + CENTER_INDEX;
+        double fj = (z - fieldFocusZ) / CELL + CENTER_INDEX;
         // 域外不采样：旧实现 clamp 到边缘，会把网格另一头的风套在这个点上（WX-SB-01）
         if (fi < 0 || fj < 0 || fi >= GRID - 1 || fj >= GRID - 1) return WindContribution.NONE;
         int i0 = clamp((int) Math.floor(fi), 0, GRID - 2);
@@ -211,8 +234,8 @@ public class SeaBreezeSystem implements WeatherPhenomenon {
 
     /** 供调试：某个世界坐标的有符号离岸距离（陆正海负）。 */
     public double signedDistanceAt(double x, double z) {
-        double fi = (x - focusX) / CELL + GRID / 2.0;
-        double fj = (z - focusZ) / CELL + GRID / 2.0;
+        double fi = (x - fieldFocusX) / CELL + CENTER_INDEX;
+        double fj = (z - fieldFocusZ) / CELL + CENTER_INDEX;
         if (fi < 0 || fj < 0 || fi >= GRID - 1 || fj >= GRID - 1) return Double.NaN;
         int i0 = clamp((int) Math.floor(fi), 0, GRID - 2);
         int j0 = clamp((int) Math.floor(fj), 0, GRID - 2);

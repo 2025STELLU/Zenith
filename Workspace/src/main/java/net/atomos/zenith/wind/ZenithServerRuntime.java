@@ -102,6 +102,22 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
     /** 粗风场半径（格）：±6×64 = ±384 格，覆盖 12 区块视距（±192）并留余量。 */
     public static final int COARSE_WIND_SYNC_RADIUS_CELLS = CoarseWindPacket.DEFAULT_RADIUS_CELLS;
 
+    /**
+     * 置信度衰减时标（tick，SYS-11）：距上次 L1 刷新这么久，置信度降到 0.75×。
+     * 取 4 倍 L1 刷新周期（64×4 = 256 tick = 12.8 s）：正常节奏下最多衰减到 0.94×，
+     * 只有 L1 因为没玩家/异常卡住时才会明显掉。
+     */
+    public static final int FRESHNESS_DECAY_TICKS = 256;
+
+    /**
+     * 焦点聚类半径（格，SYS-06）：两名玩家相距在这个半径内算"同一片区域"，
+     * 共用一个 L1 焦点；超出则各自成簇，取人数最多的那簇。
+     *
+     * <p>取 L1 半宽的 1/4（1024/4 = 256）：同簇玩家的间距远小于 L1 覆盖范围，
+     * 焦点落在质心上时双方都离边缘有富余。
+     */
+    public static final int FOCUS_CLUSTER_RADIUS_BLOCKS = 256;
+
     private static ZenithServerRuntime INSTANCE;
 
     public static void init() {
@@ -160,6 +176,27 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
         double focusX, focusZ;
         /** 存档状态是否已装回来（SYS-08）。 */
         boolean restored;
+        /**
+         * 上一次 L1 刷新时的 {@code gameTime}（SYS-11）。
+         *
+         * <p>{@code ZenithWindSample.confidence} 要反映"这个采样值有多旧"：L1 每 64 tick
+         * 才重算一次，中间 3 秒读到的都是同一帧。旧实现恒报 0.9，调用方无法区分
+         * "刚刷新"与"上一帧"，也就没法自己做插值/降级。
+         */
+        long l1LastRefreshTick = Long.MIN_VALUE;
+        /**
+         * 采样/推进互斥锁（SYS-11）。
+         *
+         * <p>采样会读 {@code l1.columns}、{@code l2} 的 scratch 缓冲，而 {@code tickDimension}
+         * 会在 L1 刷新时**写** {@code columns}。旧实现没有任何同步：其他模组从工作线程
+         * 调 {@code ZenithWindApi.sample()} 时可能读到刷新到一半的列（半新半旧的向量），
+         * 也可能与 {@code computeIfAbsent} 抢 {@code HashMap}。
+         *
+         * <p>现在两条路径都持这把锁。服务端主线程上是无竞争获取（纳秒级），
+         * 只在真的跨线程调用时才会阻塞——正确性优先于那点开销。
+         */
+        final java.util.concurrent.locks.ReentrantLock samplingLock =
+                new java.util.concurrent.locks.ReentrantLock();
 
         /**
          * 上一 tick 的墙钟时间（{@link System#nanoTime()}）。{@code -1} 表示还没跑过。
@@ -246,7 +283,16 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
         }
     }
 
-    private final Map<ResourceKey<Level>, DimensionState> dimensions = new HashMap<>();
+    /**
+     * 维度状态表（SYS-11）。
+     *
+     * <p>旧实现是普通 {@code HashMap} + {@code computeIfAbsent}：其他模组从工作线程
+     * 调 {@code ZenithWindApi.sample()} 时，会和主线程的 tick 同时改这张表——
+     * 轻则丢条目，重则 resize 期间链表成环死循环。改成并发表后
+     * {@code computeIfAbsent} 本身是原子的，不会再破坏内部结构。
+     */
+    private final Map<ResourceKey<Level>, DimensionState> dimensions =
+            new java.util.concurrent.ConcurrentHashMap<>();
 
     private DimensionState stateFor(ServerLevel level) {
         return dimensions.computeIfAbsent(level.dimension(), k -> {
@@ -260,7 +306,13 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
                         // getMaxBuildHeight() 是**开区间上界**（RT-05 / L2-05）：
                         // y == maxBuildHeight 会抛 IllegalStateException，旧代码写成 > 且靠 try/catch 掩盖
                         if (y < level.getMinBuildHeight() || y >= level.getMaxBuildHeight()) return false;
-                        BlockState st = level.getBlockState(new BlockPos(x, y, z));
+                        // SYS-10：L2 障碍探针是"任意点采样都会走"的路径，其他模组调 API
+                        // 打一个未加载坐标时，level.getBlockState 会触发同步区块加载。
+                        // 改成先取已加载区块，未加载一律当"无障碍"（比当"实心"安全：
+                        // 凭空多一堵墙会让风莫名其妙消失，少一堵只是局部修正变弱）。
+                        ChunkAccess ca = s.terrainAdapter.chunkIfLoaded(x, z);
+                        if (ca == null) return false;
+                        BlockState st = ca.getBlockState(new BlockPos(x, y, z));
                         return st.isSolid();
                     },
                     (x, y, z, r) -> heatNear(s, x, y, z, r),
@@ -447,10 +499,17 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
         // 4) L1 刷新
         int l1Ticks = Math.max(1, net.atomos.zenith.ZenithConfig.mesoscaleRefreshTicks());
         if (tick % l1Ticks == 0) {
-            s.l1.setFocus(s.focusX, s.focusZ);
-            s.lastDiagnostics = s.l1.refresh(s.l0, s.terrainAdapter, timeOfDay, raining, tick,
-                    Math.max(1.0e-3, s.accumulatedDtSeconds));
-            s.accumulatedDtSeconds = 0;
+            // SYS-11：刷新会整片覆写 columns，必须与跨线程采样互斥
+            s.samplingLock.lock();
+            try {
+                s.l1.setFocus(s.focusX, s.focusZ);
+                s.lastDiagnostics = s.l1.refresh(s.l0, s.terrainAdapter, timeOfDay, raining, tick,
+                        Math.max(1.0e-3, s.accumulatedDtSeconds));
+                s.accumulatedDtSeconds = 0;
+                s.l1LastRefreshTick = tick;
+            } finally {
+                s.samplingLock.unlock();
+            }
         }
 
         // 5) 热源索引增量刷新（RT-02）：按玩家分桶、跟随玩家 y、段级调色板预筛，10 秒内不重扫
@@ -514,20 +573,66 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
         return true;
     }
 
+    /**
+     * 焦点选择（SYS-06）。
+     *
+     * <p>旧实现取**全体玩家算术平均**：两人相距 10 km 时焦点落在中间无人区，
+     * L1（±1024 格）对两人都不覆盖，双方都在吃边缘淡出值；而且焦点每 tick 都动，
+     * 网格跟着玩家"贴脸平移"，同一地点的风每 tick 都在变。
+     *
+     * <p>现在做三件事：
+     * <ol>
+     *   <li><b>按簇取焦点</b>：以在线玩家为种子做单遍聚类（半径 {@value #FOCUS_CLUSTER_RADIUS_BLOCKS} 格），
+     *       取人数最多的簇的质心。散开的玩家各吃各的簇，不再被拉到一个中间点。</li>
+     *   <li><b>对齐 L1 瓦片</b>：L1 的网格间距就是 64 格，焦点吸附到 64 的整数倍
+     *       （{@link MesoscaleGrid#CELL_SIZE_BLOCKS}）。这样网格只在玩家跨越瓦片边界时
+     *       才整体平移，而不是每 tick 抖一下。</li>
+     *   <li><b>只在瓦片变化时提交</b>：吸附后与当前焦点相同就原样返回，下游的
+     *       {@code setFocus} 不会被无意义地反复调用（L0 还会据此判断要不要平移数组）。</li>
+     * </ol>
+     */
     private void updateFocus(ServerLevel level, DimensionState s) {
         var players = level.players();
+        double rawX, rawZ;
         if (players.isEmpty()) {
             BlockPos spawn = level.getSharedSpawnPos();
-            s.focusX = spawn.getX();
-            s.focusZ = spawn.getZ();
+            rawX = spawn.getX();
+            rawZ = spawn.getZ();
         } else {
-            double sx = 0, sz = 0;
+            // 单遍聚类：每个玩家归到第一个"质心在半径内"的簇，否则新开一簇
+            int n = players.size();
+            double[] cx = new double[n], cz = new double[n];
+            int[] count = new int[n];
+            int clusters = 0;
+            double r2 = (double) FOCUS_CLUSTER_RADIUS_BLOCKS * FOCUS_CLUSTER_RADIUS_BLOCKS;
             for (ServerPlayer p : players) {
-                sx += p.getX();
-                sz += p.getZ();
+                int hit = -1;
+                for (int c = 0; c < clusters; c++) {
+                    double dx = p.getX() - cx[c] / count[c];
+                    double dz = p.getZ() - cz[c] / count[c];
+                    if (dx * dx + dz * dz <= r2) { hit = c; break; }
+                }
+                if (hit < 0) {
+                    hit = clusters++;
+                    cx[hit] = 0; cz[hit] = 0; count[hit] = 0;
+                }
+                cx[hit] += p.getX();
+                cz[hit] += p.getZ();
+                count[hit]++;
             }
-            s.focusX = sx / players.size();
-            s.focusZ = sz / players.size();
+            int best = 0;
+            for (int c = 1; c < clusters; c++) if (count[c] > count[best]) best = c;
+            rawX = cx[best] / count[best];
+            rawZ = cz[best] / count[best];
+        }
+
+        // 吸附到 L1 瓦片（64 格）：只在跨瓦片时改变，风场不再"贴在玩家身上"
+        double tile = MesoscaleGrid.CELL_SIZE_BLOCKS;
+        double snappedX = Math.floor(rawX / tile) * tile;
+        double snappedZ = Math.floor(rawZ / tile) * tile;
+        if (snappedX != s.focusX || snappedZ != s.focusZ) {
+            s.focusX = snappedX;
+            s.focusZ = snappedZ;
         }
     }
 
@@ -569,6 +674,23 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
         if (level == null) return b.build();
         DimensionState s = stateFor(level);
 
+        // SYS-11：文档约定"服务端采样只在服务端线程调用"。这里用 assert 把这个约定
+        // 写成可执行的检查（生产环境 -ea 未开时零开销）；真正跨线程的调用方由下面
+        // 的 samplingLock 兜底，不会读到刷新到一半的列。
+        assert server.isSameThread() : "Zenith wind sampling must run on the server thread";
+        s.samplingLock.lock();
+        try {
+            return sampleLocked(level, s, x, y, z, policy, b);
+        } finally {
+            s.samplingLock.unlock();
+        }
+    }
+
+    /** {@link #sampleInternal} 的临界区：读 L1 列与 L2 scratch，与 {@code tickDimension} 的刷新互斥。 */
+    private ZenithWindSample sampleLocked(ServerLevel level, DimensionState s,
+                                          double x, double y, double z,
+                                          SamplePolicy policy, ZenithWindSample.Builder b) {
+
         // 采样策略是**真的分层门控**（API-01）：旧实现 policy 传进来一次都没读，
         // SERVER_COARSE_ONLY（最便宜的语义）照样跑 729 次方块查询的 L2。
         //
@@ -584,6 +706,8 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
 
         // 天气现象贡献（无天气维度直接跳过：现象只在 tick 里生成，这里再兜一层）
         double turbAdd = 0, precip = 0;
+        // 热力/气压扰动（WX-FR-02）：锋面过境的降温/加压由现象层给出，叠加到 L1 输出上
+        double tempDeltaK = 0, pressureDeltaPa = 0;
         if (wantPhenomena && weatherEnabled(level)) {
             for (WeatherPhenomenon p : s.phenomena()) {
                 if (!phenomenonEnabled(p)) continue;
@@ -594,6 +718,8 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
                 vz += c.vz();
                 turbAdd += c.turbulenceAdd();
                 precip = Math.max(precip, c.precipIntensity01());
+                tempDeltaK += c.tempDeltaK();
+                pressureDeltaPa += c.pressureDeltaPa();
             }
         }
 
@@ -619,15 +745,28 @@ public class ZenithServerRuntime implements ZenithWindRuntimeProvider,
         // 现象层没有逐点误差估计，按"解析式 vs 网格采样"的差异再乘 0.95。
         float confidence = wantLocal ? (float) (0.9 * l2.confidence()) : 0.9f;
         if ((layers & ZenithWindSample.LAYER_PHENOMENA) != 0) confidence *= 0.95f;
+        // SYS-11：再按数据新鲜度打折。L1 每 64 tick 才重算一次，两次刷新之间的采样
+        // 是"上一帧的场"，旧实现恒报 0.9 完全没反映这一点。这里按距上次 L1 刷新
+        // 的 tick 数线性衰减，最差到 0.75×（仍然可信，只是别当成实时值）。
+        // 还没刷新过时（Long.MIN_VALUE 哨兵）直接按最旧算：减法会溢出，必须先判哨兵。
+        float stalenessFactor = 0.75f;
+        if (s.l1LastRefreshTick != Long.MIN_VALUE) {
+            long staleness = Math.max(0L, level.getGameTime() - s.l1LastRefreshTick);
+            stalenessFactor = (float) (1.0
+                    - Math.min(1.0, staleness / (double) FRESHNESS_DECAY_TICKS) * 0.25);
+        }
+        confidence *= stalenessFactor;
 
         return b.meanVelocity(ZenithVec3.of(vx, vy, vz))
                 .gustVelocity(ZenithVec3.of(l1.gustX(), l1.gustY(), l1.gustZ()))
                 .localModifier(ZenithVec3.of(l2.modX(), l2.modY(), l2.modZ()))
                 .turbulenceIntensity((float) turb)
                 .windShearPerBlock((float) l1.shearPerBlock())
-                // 气压从 L0 透传（L0-07 / API-07）：旧实现恒 0，API 文档里的字段是死值
-                .pressureAnomalyPa((float) l1.pressureAnomalyPa())
-                .airTemperatureKelvin((float) l1.airTempK())
+                // 气压从 L0 透传（L0-07 / API-07）：旧实现恒 0，API 文档里的字段是死值。
+                // 现象层的气压扰动叠加在上面（WX-FR-02）。
+                .pressureAnomalyPa((float) (l1.pressureAnomalyPa() + pressureDeltaPa))
+                // 温度同理：L1 给的是未受天气系统影响的环境温度，锋面再改（WX-FR-02）
+                .airTemperatureKelvin((float) (l1.airTempK() + tempDeltaK))
                 .humidity01((float) l1.humidity01())
                 .sheltered(l2.sheltered() || l1.sheltered())
                 .source(wantLocal ? ZenithWindSample.Source.L2_LOCAL : ZenithWindSample.Source.L1_COARSE)

@@ -170,6 +170,9 @@ public class StormCellSystem implements WeatherPhenomenon {
         for (int dy = 2; dy <= 40; dy++) {
             var pos = base.above(dy);
             if (pos.getY() > level.getMaxBuildHeight()) break;
+            // SYS-10：只读已加载区块。玩家头顶 40 格通常都在加载范围内，但传送/掉线
+            // 的瞬间可能不成立，这里兜一层，绝不触发同步加载。
+            if (!level.hasChunkAt(pos)) continue;
             var st = level.getBlockState(pos);
             if (!st.isAir() && st.isSolidRender(level, pos)) return true;
         }
