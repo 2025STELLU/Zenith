@@ -57,7 +57,7 @@ powershell -NoProfile -File tools/dev/probe.ps1 L1Probe
 
 产物全部落在 `.build/`（已忽略）。脚本通过 `$PSScriptRoot` 定位仓库，依赖 JDK 21（可用 `ZENITH_JAVA_HOME` 覆盖）与 `GRADLE_USER_HOME`（默认 `~/.gradle`）。
 
-`tools/dev/libs/neoforge-merged.jar` 是编译所需的合并 jar（NeoForge + Minecraft）。它体积较大但环境里没有它的替代来源，因此随仓库保留。
+`tools/dev/libs/neoforge-merged.jar` 是编译所需的合并 jar（NeoForge + Minecraft，约 31 MB）。它是可再生的编译输入，**没有入库**；缺失时按 `tools/dev/libs/README.md` 的三级退让规则查找。
 
 ## 许可
 
