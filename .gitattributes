@@ -1,0 +1,22 @@
+# 统一换行符。仓库在这台机器上是 core.autocrlf=true，不写死的话
+# Linux/macOS 上 checkout 出来的 gradlew 会带 CRLF，`./gradlew` 直接
+# 报 /bin/sh^M: bad interpreter。
+* text=auto
+
+# Shell 脚本必须 LF
+*.sh    text eol=lf
+gradlew text eol=lf
+
+# Windows 批处理必须 CRLF
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+
+# PowerShell 两种都吃，但保持 CRLF 更贴近 Windows 默认
+*.ps1   text eol=crlf
+*.psm1  text eol=crlf
+
+# 二进制：不要做任何换行/编码转换
+*.jar   binary
+*.png   binary
+*.ogg   binary
+*.nbt   binary

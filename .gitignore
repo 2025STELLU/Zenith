@@ -1,24 +1,17 @@
-# 构建与 IDE 产物
-Workspace/.gradle/
-Workspace/build/
-Workspace/run/
-Workspace/.idea/
-*.iml
-*.log
+# 构建产物与本地脚手架
+.build/
+.javac-out*/
+.javac-*.txt
+.test-std*.txt
+.verify/
+# 合并 jar 约 31 MB，是可再生的编译输入，不入库（见 tools/dev/libs/README.md）
+tools/dev/libs/*.jar
 
 # 审计临时文件
-.tmp*.md
-.tmp*.txt
-.tmp*.py
+.tmp*
 
-# 本地编译/自检脚手架（javac 直编 + 离线数值验证，不是发布内容）
-.javac-*
-.javac-out*/
-.libs/
-.verify/
-.check*.ps1
-.run-tests.ps1
-.test-std*.txt
-.filter*.ps1
-.javap.ps1
-.verify.ps1
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
