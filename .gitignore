@@ -1,17 +1,55 @@
-# 构建产物与本地脚手架
+# ── 离线脚本的产物（tools/dev/*.ps1）──────────────────────────────
 .build/
 .javac-out*/
 .javac-*.txt
 .test-std*.txt
 .verify/
+.tmp*
 # 合并 jar 约 31 MB，是可再生的编译输入，不入库（见 tools/dev/libs/README.md）
 tools/dev/libs/*.jar
 
-# 审计临时文件
-.tmp*
+# ── Gradle ──────────────────────────────────────────────────────
+.gradle/
+build/
+!**/src/main/**/build/
+!**/src/test/**/build/
+run/
 
-# OS / IDE
+# ── IDE ─────────────────────────────────────────────────────────
+.idea/
+*.iws
+*.iml
+*.ipr
+out/
+!**/src/main/**/out/
+!**/src/test/**/out/
+.eclipse/
+.classpath
+.project
+.settings/
+bin/
+!**/src/main/**/bin/
+!**/src/test/**/bin/
+.vscode/
+
+# ── OS ──────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
-.idea/
-.vscode/
+
+# ── Java ────────────────────────────────────────────────────────
+*.class
+*.jar
+!gradle/wrapper/gradle-wrapper.jar
+# releases/ 下是历史发布包，保留在版本库里
+!releases/*.jar
+*.war
+*.ear
+*.zip
+*.tar.gz
+*.rar
+hs_err_pid*
+replay_pid*
+
+# ── 本地凭据，永不入库 ─────────────────────────────────────────
+GITHUB-TOKEN.txt
+*git-creds*

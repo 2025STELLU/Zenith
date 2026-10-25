@@ -1,8 +1,8 @@
 # Zenith 0.1.4-alpha 全模组独立审计报告
 
-> 审计对象：`Workspace`（`mod_version = 0.1.4-alpha`，NeoForge `21.1.256` / Minecraft `1.21.1`，JDK 21，包名 `net.atomos.zenith`）
+> 审计对象：模组工程根目录（`mod_version = 0.1.4-alpha`，NeoForge `21.1.256` / Minecraft `1.21.1`，JDK 21，包名 `net.atomos.zenith`）
 > 实测规模：**106 个 Java 文件 / 8,348 行（含空行；有效代码约 7,300 行）**；`src/main/resources` **57 个文件 / 38 个 JSON**
-> 审计方式：逐文件通读 + 关键公式离线数值复现 + 与 `Workspace/docs/01`–`03`（0.1.4 自述）及 `Hark/01`–`03`（0.1.1 基线）逐条交叉核对 + 构建尝试
+> 审计方式：逐文件通读 + 关键公式离线数值复现 + 与 `docs/mod/01`–`03`（0.1.4 自述）及 `Hark/01`–`03`（0.1.1 基线）逐条交叉核对 + 构建尝试
 > 审计立场：**只读审计**。未修改任何源码、资源或既有文档。
 > 编号约定：沿用 `SYS / DRV / L0 / L1 / L2 / API / NET / CLI / SAIL / BLK / ENG`；天气现象统一为 `WX-<系统>-<序号>`，旧天气编号（TH/SB/SC/TY/FR/SQ/DD/MW/MS）作为历史别名保留；新横切问题顺延到本家族下一个可用编号。
 >
@@ -33,7 +33,7 @@
 
 ### 0.3 与 0.1.4 自述结论的差异
 
-| 自述（`Workspace/docs/`） | 独立复核 |
+| 自述（`docs/mod/`） | 独立复核 |
 |---|---|
 | `01` §0：0.1.3 的 10 个新增问题，0.1.4 修了 9 个 | 同意 `N-10/12/13/14/15/16/17/19` 共 8 项已修；`N-11` 只修了客户端，服务端仍用错误地形判定；`N-18` 修了 ticker 但引入 `N-20` 风声回归。**净修复 8 项，不是 9 项** |
 | `01` §2.3：未修列表 = L1-01、L2-01、SYS-01/03/05、DRV-01/02/03、海风、SYS-08/09/10、API、SAIL、NET | 同意，且遗漏 **SYS-12**（地形适配器）这一比 L1-01 更靠上游的 P0；`DRV-05/06/07`、`L0-03…08`、`L1-02…06`、`FR-02`、`TY-02…07`、`SC-02…05` 也应在这张表里 |
@@ -2493,7 +2493,7 @@ ROOT = os.path.expanduser("~/workspace/zenith/src/main/resources/assets/zenith/t
 
 ---
 
-## 15. 与 `Workspace/docs/` 自述的逐项差异
+## 15. 与 `docs/mod/` 自述的逐项差异
 
 只列**自述与实测不一致**的条目。一致的条目已在 §0.4（值得肯定）与 §14.1（关闭证据）中确认，不重复。
 
@@ -2620,7 +2620,7 @@ ROOT = os.path.expanduser("~/workspace/zenith/src/main/resources/assets/zenith/t
 
 ### 17.1 构建状态：**未验证**
 
-**实测命令**：`./gradlew build --no-daemon`（工作目录 `Workspace`）。
+**实测命令**：`./gradlew build --no-daemon`（工作目录为仓库根）。
 
 **失败输出（原文）**：
 
@@ -2719,7 +2719,7 @@ BUILD FAILED in 2m 42s
 
 本节记录针对本报告 §2–§13 所列 **122 条现存问题**的修复实施结果，以及实施过程中发现的**报告自身口径错误**、**必须由实施者自行决定的设计选择**、**逐条复核中新发现的 8 条"此前未真正修完"**，和**1 条只做到部分的修复**。
 
-> 版本：`mod_version = 0.1.5-alpha`（`Workspace/gradle.properties`）。
+> 版本：`mod_version = 0.1.5-alpha`（`gradle.properties`）。
 > 原则：每条修复独立成批提交，便于逐条回滚；未改动 `Hark/01`–`03`。
 
 ### 18.1 提交链

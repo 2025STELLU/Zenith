@@ -17,8 +17,8 @@ $Javap       = Join-Path $JavaHome "bin\javap.exe"
 $GradleHome  = if ($env:GRADLE_USER_HOME) { $env:GRADLE_USER_HOME } else { Join-Path $env:USERPROFILE ".gradle" }
 $GradleJars  = Join-Path $GradleHome "caches\modules-2\files-2.1"
 
-$MainSrc     = Join-Path $RepoRoot "Workspace\src\main\java"
-$TestSrc     = Join-Path $RepoRoot "Workspace\src\test\java"
+$MainSrc     = Join-Path $RepoRoot "src\main\java"
+$TestSrc     = Join-Path $RepoRoot "src\test\java"
 $BuildDir    = Join-Path $RepoRoot ".build"
 $MainOut     = Join-Path $BuildDir "classes\main"
 $TestOut     = Join-Path $BuildDir "classes\test"

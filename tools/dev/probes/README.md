@@ -3,7 +3,7 @@
 一次性诊断程序：直接 `main()` 打印数值，不是单元测试。
 
 用途是把写进 `docs/04 §17.2` / `§18.6` 的那些 gold values 现算一遍。它们依赖的类在
-`Workspace/src/main/java`，跑之前要先执行 `tools/dev/build.ps1`。
+`src/main/java`，跑之前要先执行 `tools/dev/build.ps1`。
 
 ```powershell
 powershell -NoProfile -File tools/dev/probe.ps1 -List

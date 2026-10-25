@@ -1,4 +1,4 @@
-$root = "D:\Stellux\MCDev\Zenith\Workspace\src\main\java"
+$root = "D:\Stellux\MCDev\Zenith\src\main\java"
 $out = "D:\Stellux\MCDev\Zenith\.javac-out3"
 if (Test-Path $out) { Remove-Item -Recurse -Force $out }
 New-Item -ItemType Directory -Path $out | Out-Null

@@ -1,4 +1,4 @@
-# Compile Workspace/src/test/java against the already-built main classes.
+# Compile src/test/java against the already-built main classes.
 #
 # Usage:  powershell -NoProfile -File tools/dev/test-compile.ps1
 #

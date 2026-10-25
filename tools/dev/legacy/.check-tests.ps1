@@ -26,7 +26,7 @@ $cpParts = $cpParts | ForEach-Object { $_.Replace('\', '/') }
 $cp = [string]::Join(";", $cpParts)
 
 $srcList = @()
-foreach ($s in (Get-ChildItem -Path "$root\Workspace\src\test\java" -Recurse -Filter *.java)) {
+foreach ($s in (Get-ChildItem -Path "$root\src\test\java" -Recurse -Filter *.java)) {
     $srcList += $s.FullName.Replace('\', '/')
 }
 Write-Output ("testSrcs=" + $srcList.Count)

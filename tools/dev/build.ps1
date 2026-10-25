@@ -1,4 +1,4 @@
-# Compile all of Workspace/src/main/java with javac.
+# Compile all of src/main/java with javac.
 #
 # Usage:  powershell -NoProfile -File tools/dev/build.ps1 [-Quiet]
 #
