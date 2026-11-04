@@ -19,8 +19,8 @@ import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.RegisterCommandsEvent;
 
 /**
- * 服务端指令：/zenith status|wind|storm|typhoon|thermal|seabreeze|polar。
- * 会实际改写世界天气的子命令（storm/typhoon/thermal）要 OP 2 级；
+ * 服务端指令：/zenith status|wind|storm|typhoon|thermal|tornado|seabreeze|polar。
+ * 会实际改写世界天气的子命令（storm/typhoon/thermal/tornado）要 OP 2 级；
  * 纯查询的不拦。
  */
 public final class ZenithCommands {
@@ -111,6 +111,28 @@ public final class ZenithCommands {
                                     net.minecraft.world.level.levelgen.Heightmap.Types.WORLD_SURFACE,
                                     p.getX() + 20, p.getZ()));
                     src.sendSuccess(() -> Component.translatable("zenith.command.thermal_spawned"), true);
+                    return 1;
+                }))
+                .then(Commands.literal("tornado").requires(src -> src.hasPermission(2)).executes(ctx -> {
+                    CommandSourceStack src = ctx.getSource();
+                    ServerPlayer player = src.getPlayerOrException();
+                    ServerLevel level = player.serverLevel();
+                    var state = ZenithServerRuntime.get().debugState(level.dimension());
+                    if (state == null) {
+                        src.sendFailure(Component.translatable("zenith.command.not_initialized"));
+                        return 0;
+                    }
+                    // 视线水平方向前方 120 格：站在安全距离外观察成形过程
+                    Vec3 look = player.getLookAngle();
+                    double hl = Math.sqrt(look.x * look.x + look.z * look.z);
+                    double dx = hl < 1e-4 ? 1 : look.x / hl, dz = hl < 1e-4 ? 0 : look.z / hl;
+                    int x = (int) Math.floor(player.getX() + dx * 120);
+                    int z = (int) Math.floor(player.getZ() + dz * 120);
+                    int groundY = level.getHeight(
+                            net.minecraft.world.level.levelgen.Heightmap.Types.WORLD_SURFACE, x, z);
+                    state.tornadoes.spawnDebug(x + 0.5, z + 0.5, groundY);
+                    src.sendSuccess(() -> Component.translatable("zenith.command.tornado_spawned",
+                            String.valueOf(x), String.valueOf(z)), true);
                     return 1;
                 }))
                 .then(Commands.literal("seabreeze").executes(ctx -> {

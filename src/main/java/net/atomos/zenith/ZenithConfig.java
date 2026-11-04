@@ -129,6 +129,11 @@ public final class ZenithConfig {
         public final ModConfigSpec.DoubleValue fogMultiplier;
         public final ModConfigSpec.DoubleValue windSoundVolume;
         public final ModConfigSpec.BooleanValue showWindParticles;
+        public final ModConfigSpec.EnumValue<TornadoQuality> tornadoQuality;
+        public final ModConfigSpec.IntValue volumetricSteps;
+        public final ModConfigSpec.BooleanValue volumetricFineLighting;
+        public final ModConfigSpec.BooleanValue tornadoDebrisParticles;
+        public final ModConfigSpec.BooleanValue tornadoSounds;
 
         Client(ModConfigSpec.Builder b) {
             b.comment("表现").push("visuals");
@@ -144,6 +149,25 @@ public final class ZenithConfig {
             showWindParticles = b
                     .comment("显示风场粒子。")
                     .define("showWindParticles", true);
+            b.pop();
+
+            b.comment("龙卷特效").push("tornado");
+            tornadoQuality = b
+                    .comment("龙卷画质。OFF = 不画；LOW / MEDIUM / HIGH = 贴图壳层 + 云团精灵（HIGH 默认，开销很低）；",
+                            "VOLUMETRIC = 体积云（光线步进，GPU 开销明显更高；开光影包或着色器加载失败时自动退回 HIGH）。")
+                    .defineEnum("tornadoQuality", TornadoQuality.HIGH);
+            volumetricSteps = b
+                    .comment("体积云每像素最多步进次数。越大越细腻、越慢。")
+                    .defineInRange("volumetricSteps", 96, 32, 160);
+            volumetricFineLighting = b
+                    .comment("体积云自阴影用 3 个光照样本（关 = 1 个，省约 40%）。")
+                    .define("volumetricFineLighting", true);
+            tornadoDebrisParticles = b
+                    .comment("龙卷卷起地表真实方块的碎屑粒子。")
+                    .define("tornadoDebrisParticles", true);
+            tornadoSounds = b
+                    .comment("龙卷轰鸣与云底雷声。")
+                    .define("tornadoSounds", true);
             b.pop();
         }
     }
@@ -202,4 +226,13 @@ public final class ZenithConfig {
     public static double fogMultiplier() { return safe(() -> CLIENT.fogMultiplier.get(), 1.0); }
     public static double windSoundVolume() { return safe(() -> CLIENT.windSoundVolume.get(), 1.0); }
     public static boolean showWindParticles() { return safe(() -> CLIENT.showWindParticles.get(), true); }
+
+    /** 龙卷画质档位。 */
+    public enum TornadoQuality { OFF, LOW, MEDIUM, HIGH, VOLUMETRIC }
+
+    public static TornadoQuality tornadoQuality() { return safe(() -> CLIENT.tornadoQuality.get(), TornadoQuality.HIGH); }
+    public static int volumetricSteps() { return safe(() -> CLIENT.volumetricSteps.get(), 96); }
+    public static boolean volumetricFineLighting() { return safe(() -> CLIENT.volumetricFineLighting.get(), true); }
+    public static boolean tornadoDebrisParticles() { return safe(() -> CLIENT.tornadoDebrisParticles.get(), true); }
+    public static boolean tornadoSounds() { return safe(() -> CLIENT.tornadoSounds.get(), true); }
 }

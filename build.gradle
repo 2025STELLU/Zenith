@@ -53,12 +53,37 @@ neoForge {
     // ENG-04：让 `gradlew test` 能在带 Minecraft 类路径的环境里跑纯 JVM 单测。
     // 单测只碰不依赖 Minecraft 运行时的纯函数（L0/L1 网格、帆船物理、雾模型、
     // 环面回绕、翼型几何、事件总线），不启动游戏、不加载世界。
+    // 必须指明 testedMod：否则 FML 把 build/classes/java/main 当成独立模组文件加载，
+    // 找不到 resources 里的 neoforge.mods.toml，报 "is not a valid mod file"，所有测试类都起不来。
     unitTest {
         enable()
+        testedMod = mods."${mod_id}"
     }
 }
 
 sourceSets.main.resources { srcDir 'src/generated/resources' }
+
+// N-23：把 gradle.properties 里的值填进 neoforge.mods.toml。
+// 之前没有这一步，jar 里的 mods.toml 是原样的 ${mod_id}，FML 解析时报
+// "Invalid bare key: '${mod_id}'"，模组整个不加载（单测也因此全部起不来）。
+tasks.named('processResources', ProcessResources) {
+    def replaceProperties = [
+            minecraft_version              : minecraft_version,
+            minecraft_version_range        : minecraft_version_range,
+            neoforge_version               : neoforge_version,
+            neoforge_version_range         : neoforge_version_range,
+            neoforge_loader_version_range  : neoforge_loader_version_range,
+            mod_id                         : mod_id,
+            mod_name                       : mod_name,
+            mod_version                    : mod_version,
+            mod_authors                    : mod_authors,
+            mod_description                : mod_description,
+    ]
+    inputs.properties replaceProperties
+    filesMatching(['META-INF/neoforge.mods.toml']) {
+        expand replaceProperties
+    }
+}
 
 dependencies {
     // 纯 NeoForge，无外部模组依赖

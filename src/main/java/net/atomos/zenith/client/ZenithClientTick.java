@@ -20,6 +20,9 @@ public final class ZenithClientTick {
         ZenithVisualizer.clientTick();
         WindSoundManager.clientTick();
         FogController.clientTick();
+        // 龙卷：先跟踪（平滑快照），再出碎屑/声音
+        net.atomos.zenith.client.render.tornado.TornadoTracker.clientTick();
+        net.atomos.zenith.client.render.tornado.TornadoAmbience.clientTick();
     }
 
     @SubscribeEvent

@@ -20,6 +20,7 @@
   "zenith.command.storm_spawned": "已在脚下生成风暴单体（成熟期）",
   "zenith.command.typhoon_spawned": "已在东侧 300m 生成台风",
   "zenith.command.thermal_spawned": "已生成测试热泡",
+  "zenith.command.tornado_spawned": "已在 %s, %s 生成测试龙卷",
   "zenith.command.seabreeze": "海风贡献: (%s, %s, %s) m/s  海风锋离岸: %sm",
   "zenith.command.polar_failed": "极线计算失败: %s",
   "zenith.command.polar_header": "α → Cl / Cd:",

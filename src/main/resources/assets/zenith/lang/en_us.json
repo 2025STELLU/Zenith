@@ -20,6 +20,7 @@
   "zenith.command.storm_spawned": "Spawned a storm cell (mature) at your feet",
   "zenith.command.typhoon_spawned": "Spawned a typhoon 300m to the east",
   "zenith.command.thermal_spawned": "Spawned a test thermal",
+  "zenith.command.tornado_spawned": "Spawned a test tornado at %s, %s",
   "zenith.command.seabreeze": "Sea breeze: (%s, %s, %s) m/s  Front inland: %sm",
   "zenith.command.polar_failed": "Polar computation failed: %s",
   "zenith.command.polar_header": "α → Cl / Cd:",
